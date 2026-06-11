@@ -1,0 +1,23 @@
+.panel {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+.collapsed {
+  pointer-events: none;
+}
+
+/* Draggable header strip matching the other panels */
+.drag {
+  height: 52px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+  -webkit-app-region: drag;
+}
+
+.body {
+  flex: 1;
+}
