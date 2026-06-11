@@ -54,19 +54,8 @@ You are a helpful AI assistant for a software project. Answer the user's questio
 Use the project context below to inform your answer.
 """
 
-# Map display model IDs to real OpenAI API IDs for Q&A answers.
-# o1 is intentionally avoided here — it's too slow/expensive for Q&A and
-# requires reasoning-model special-casing (no temperature, no streaming).
-# "auto" is NOT in this map: callers must resolve "auto" via model_router
-# before calling _answer_question, so Q&A routing is symmetric with the
-# implement/interrogate paths.
-_QA_MODEL_MAP: dict[str, str] = {
-    "gpt-5.4-mini":        "gpt-4o-mini",
-    "gpt-5.4-low-effort":  "gpt-4o",
-    "gpt-5.4-high-effort": "gpt-4o",
-    "gpt-5.5-low-effort":  "gpt-4o",
-    "gpt-5.5-high-effort": "gpt-4o",
-}
+# Q&A answers now use the main _CODER_MODEL_MAP so the user's selected large model
+# is actually used, handling reasoning model constraints (no temperature).
 
 
 async def _classify_intent(user_message: str, project_index: dict) -> str:
@@ -100,33 +89,8 @@ async def _classify_intent(user_message: str, project_index: dict) -> str:
         return "implement"
 
 
-async def _answer_question(user_message: str, project_index: dict, display_model: str) -> str:
-    """Generate a Markdown answer using the user's selected model with project context."""
-    key = retrieve_openai_key()
-    if not key:
-        return "No API key configured."
-
-    tree_str = _fmt_tree(project_index.get("file_tree") or {})
-    git_str = _fmt_git(project_index.get("git_context") or {})
-    context = f"PROJECT STRUCTURE:\n{tree_str or '(empty)'}\n\nGIT CONTEXT:\n{git_str}"
-
-    api_model = _QA_MODEL_MAP.get(display_model, "gpt-4o")
-    logger.info(f"Q&A answer | display_model={display_model!r} api_model={api_model!r}")
-
-    client = AsyncOpenAI(api_key=key)
-    try:
-        response = await client.chat.completions.create(
-            model=api_model,
-            messages=[
-                {"role": "system", "content": f"{_QA_SYSTEM}\n\n{context}"},
-                {"role": "user", "content": user_message},
-            ],
-            temperature=0.3,
-        )
-        return response.choices[0].message.content or "I couldn't generate an answer."
-    except Exception as exc:
-        logger.exception("_answer_question failed")
-        return f"Error generating answer: {exc}"
+# _answer_question has been removed. We now route Q&A directly to the CoderAgent
+# so it has access to file reading and search tools.
 
 
 # ── WebSocket handler ─────────────────────────────────────────────────────────
@@ -160,13 +124,17 @@ async def chat_ws(websocket: WebSocket) -> None:
 
                 # Step 2+3: Route
                 if action == "answer":
-                    # Symmetric with implement/interrogate: resolve "auto" via
-                    # the router before passing the tier to _answer_question.
                     if active_selected_model == "auto":
                         active_selected_model = await model_router.classify(user_message)
                         logger.info(f"Auto-router selected (Q&A): {active_selected_model}")
-                    content = await _answer_question(user_message, project_index, active_selected_model)
-                    await websocket.send_json({"type": "message", "content": content})
+                    
+                    await websocket.send_json({
+                        "type": "ready",
+                        "refined_prompt": user_message,
+                        "did_interrogate": False,
+                    })
+                    logger.info(f"Dispatching to Q&A agent | model={active_selected_model!r}")
+                    await supervisor.run(user_message, active_project_path, active_selected_model, websocket, intent="answer")
                     break
 
                 elif action == "interrogate":

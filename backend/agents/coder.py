@@ -176,13 +176,30 @@ what was changed: which files were modified, what logic was added, and any cavea
 Use `code spans` for file paths and symbol names.
 """
 
+_QA_IMPL_SYSTEM = """\
+You are an expert software engineer analyzing a codebase.
+
+You have three tools:
+  • read_file       — inspect any file
+  • search_grep     — find code by exact string or regex (use when you know the name)
+  • search_semantic — find code by concept using vector search (use when you don't know the exact name)
+
+Rules:
+  1. Use search_semantic when you need to find code by concept or behaviour.
+  2. Use search_grep when you know the exact symbol, import, or string.
+  3. Explore the codebase using the tools until you have enough information to confidently answer the user's question.
+  4. Once you are done investigating, stop calling tools and write a **Markdown summary** that completely answers the user's query.
+  5. Format your response cleanly and use `code spans` for file paths and symbol names.
+"""
+
 # ── Agent ─────────────────────────────────────────────────────────────────────
 
 _SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", "dist", "build"}
 
 
 class CoderAgent:
-    def __init__(self, project_path: str, model: str) -> None:
+    def __init__(self, project_path: str, model: str, intent: str = "implement") -> None:
+        self._intent = intent
         self._path = Path(project_path).resolve()
         self._api_model = _MODEL_MAP.get(model, model)   # resolve display ID → real API ID
         self._is_reasoning = self._api_model in _REASONING_MODELS
@@ -208,6 +225,20 @@ class CoderAgent:
 
         try:
             knowledge_tree = await self._build_knowledge_tree()
+
+            if self._intent == "answer":
+                read_tools = [t for t in _TOOLS if t["function"]["name"] in {"read_file", "search_grep", "search_semantic"}]
+                messages = [
+                    {"role": "system", "content": _QA_IMPL_SYSTEM},
+                    {"role": "user", "content": f"{knowledge_tree}\n\nQUESTION:\n{prompt}"},
+                ]
+                summary = ""
+                async for event in self._tool_loop(messages, tools=read_tools):
+                    yield event
+                    if event["type"] == "impl_done":
+                        summary = event["content"]
+                yield {"type": "done", "summary": summary}
+                return
 
             # Phase 1 — Planning
             plan = ""
@@ -276,13 +307,15 @@ class CoderAgent:
 
     # ── Phase 2: Tool-calling loop ─────────────────────────────────────────
 
-    async def _tool_loop(self, messages: list[dict]):
+    async def _tool_loop(self, messages: list[dict], tools: list[dict] | None = None):
+        if tools is None:
+            tools = _TOOLS
         for _ in range(_MAX_TOOL_ROUNDS):
             response = await self._client.chat.completions.create(
                 **self._build_create_kwargs(
                     messages=messages,
                     temperature=0.1,
-                    tools=_TOOLS,
+                    tools=tools,
                     tool_choice="auto",
                 )
             )

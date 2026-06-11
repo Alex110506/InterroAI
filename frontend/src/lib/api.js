@@ -26,6 +26,15 @@ export const api = {
       body: JSON.stringify({ path }),
     }),
 
+  getHistory: (project_path) => 
+    request(`/api/history?project_path=${encodeURIComponent(project_path)}`),
+
+  saveMessage: (project_path, message) => 
+    request('/api/history', {
+      method: 'POST',
+      body: JSON.stringify({ project_path, message })
+    }),
+
   openChatSocket: () => {
     const wsBase = (import.meta.env.VITE_BACKEND_URL ?? 'http://localhost:8000')
       .replace(/^http/, 'ws')

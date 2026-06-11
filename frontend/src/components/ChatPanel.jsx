@@ -194,17 +194,34 @@ export default function ChatPanel({ activeId, projects, thoughtOpen, onToggleTho
     setIsLoading(false)
     setInput('')
     bottomRef.current?.scrollIntoView({ behavior: 'instant' })
-  }, [activeId])
+
+    if (activeId && project?.folderPath) {
+      api.getHistory(project.folderPath)
+        .then((res) => {
+          projectMessages[activeId] = res.messages || []
+          forceUpdate((n) => n + 1)
+          setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'instant' }), 50)
+        })
+        .catch(console.error)
+    }
+  }, [activeId, project?.folderPath])
 
   const messages = activeId ? (projectMessages[activeId] ?? []) : []
 
   const addMessage = useCallback((msg) => {
     if (!activeId) return
     if (!projectMessages[activeId]) projectMessages[activeId] = []
-    projectMessages[activeId].push({ id: Date.now() + Math.random(), ...msg })
+    
+    const newMsg = msg.id ? msg : { id: Date.now() + Math.random().toString(), ...msg }
+    projectMessages[activeId].push(newMsg)
+    
+    if (!msg.id && project?.folderPath) {
+      api.saveMessage(project.folderPath, newMsg).catch(console.error)
+    }
+    
     forceUpdate((n) => n + 1)
     setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }), 50)
-  }, [activeId])
+  }, [activeId, project?.folderPath])
 
   /* ── WebSocket message handler ── */
   const handleWsMessage = useCallback((event) => {
