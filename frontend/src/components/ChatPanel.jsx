@@ -1,4 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import {
   Plus, ChevronDown, ArrowUp, Brain, FolderOpen,
   PanelRight, PanelRightClose,
@@ -147,16 +149,16 @@ function ThinkingBubble() {
 }
 
 const MODELS = [
-  { id: 'auto', label: 'Auto' },
+  { id: 'auto',               label: 'Auto' },
   { id: 'gpt-5.5-high-effort', label: 'GPT-5.5 High Effort' },
-  { id: 'gpt-5.5-low-effort', label: 'GPT-5.5 Low Effort' },
+  { id: 'gpt-5.5-low-effort',  label: 'GPT-5.5 Low Effort' },
   { id: 'gpt-5.4-high-effort', label: 'GPT-5.4 High Effort' },
-  { id: 'gpt-5.4-low-effort', label: 'GPT-5.4 Low Effort' },
-  { id: 'gpt-5.4-mini', label: 'GPT-5.4 Mini' },
+  { id: 'gpt-5.4-low-effort',  label: 'GPT-5.4 Low Effort' },
+  { id: 'gpt-5.4-mini',        label: 'GPT-5.4 Mini' },
 ]
 
 /* ─── Main ChatPanel ─────────────────────────────────────────────────── */
-export default function ChatPanel({ activeId, projects, thoughtOpen, onToggleThought }) {
+export default function ChatPanel({ activeId, projects, thoughtOpen, onToggleThought, onThoughtEvent, clearThought, onBusyChange }) {
   const [input, setInput] = useState('')
   const [selectedModel, setSelectedModel] = useState('auto')
   const [showModelDropdown, setShowModelDropdown] = useState(false)
@@ -168,6 +170,11 @@ export default function ChatPanel({ activeId, projects, thoughtOpen, onToggleTho
   const wsRef = useRef(null)
 
   const project = projects.find((p) => p.id === activeId) ?? null
+
+  /* ── Surface "model is working" state to the app shell (drives RunningWave) ── */
+  useEffect(() => {
+    onBusyChange?.(isLoading || phase === 'ready')
+  }, [isLoading, phase, onBusyChange])
 
   /* ── Auto-resize textarea ── */
   useEffect(() => {
@@ -201,31 +208,60 @@ export default function ChatPanel({ activeId, projects, thoughtOpen, onToggleTho
 
   /* ── WebSocket message handler ── */
   const handleWsMessage = useCallback((event) => {
-    setIsLoading(false)
     if (event.type === 'message') {
-      // Direct answer — classifier decided no interrogation needed
+      setIsLoading(false)
       addMessage({ role: 'agent', subtype: 'message', content: event.content })
       setPhase('idle')
       wsRef.current?.close()
       wsRef.current = null
+
     } else if (event.type === 'question') {
-      // First question arriving → NOW enter interrogation mode
+      setIsLoading(false)
       setPhase('interrogating')
       addMessage({ role: 'agent', subtype: 'question', content: event.question, turn: event.turn })
+
     } else if (event.type === 'ready') {
+      // Coder is starting — keep WebSocket open, keep loading indicator
       if (event.did_interrogate) {
         addMessage({ role: 'agent', subtype: 'ready', content: event.refined_prompt })
       }
       setPhase('ready')
+
+    // ── Coder events → right panel ──────────────────────────────────────
+    } else if (event.type === 'plan_chunk' || event.type === 'plan') {
+      setIsLoading(false)
+      onThoughtEvent?.(event)
+
+    } else if (event.type === 'tool_call' || event.type === 'tool_result') {
+      onThoughtEvent?.(event)
+
+    } else if (event.type === 'validation_result') {
+      onThoughtEvent?.(event)
+
+    } else if (event.type === 'correction') {
+      onThoughtEvent?.(event)
+
+    } else if (event.type === 'impl_done') {
+      onThoughtEvent?.(event)
+
+    } else if (event.type === 'done') {
+      setIsLoading(false)
+      onThoughtEvent?.(event)
+      if (event.summary) {
+        addMessage({ role: 'agent', subtype: 'message', content: event.summary })
+      }
+      setPhase('idle')
       wsRef.current?.close()
       wsRef.current = null
+
     } else if (event.type === 'error') {
+      setIsLoading(false)
       addMessage({ role: 'agent', subtype: 'error', content: event.message })
       setPhase('idle')
       wsRef.current?.close()
       wsRef.current = null
     }
-  }, [addMessage])
+  }, [addMessage, onThoughtEvent])
 
   /* ── Send handler ── */
   const send = () => {
@@ -235,6 +271,7 @@ export default function ChatPanel({ activeId, projects, thoughtOpen, onToggleTho
     addMessage({ role: 'user', content: text })
     setInput('')
     setIsLoading(true)
+    clearThought?.()
 
     if (phase === 'idle' || phase === 'ready') {
       // Open socket and let the backend decide: direct answer or interrogation
@@ -392,7 +429,9 @@ export default function ChatPanel({ activeId, projects, thoughtOpen, onToggleTho
                     <Sparkles size={10} strokeWidth={2} />
                     Clarifying question {msg.turn}
                   </span>
-                  <p className={s.agentText}>{msg.content}</p>
+                  <div className={s.agentMd}>
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+                  </div>
                 </div>
               ) : msg.subtype === 'ready' ? (
                 <div className={s.agentWrap}>
@@ -406,11 +445,15 @@ export default function ChatPanel({ activeId, projects, thoughtOpen, onToggleTho
                 </div>
               ) : msg.subtype === 'error' ? (
                 <div className={s.agentWrap}>
-                  <p className={`${s.agentText} ${s.agentTextError}`}>{msg.content}</p>
+                  <div className={`${s.agentMd} ${s.agentMdError}`}>
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+                  </div>
                 </div>
               ) : (
                 <div className={s.agentWrap}>
-                  <p className={s.agentText}>{msg.content}</p>
+                  <div className={s.agentMd}>
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+                  </div>
                 </div>
               )}
             </div>
@@ -451,7 +494,7 @@ export default function ChatPanel({ activeId, projects, thoughtOpen, onToggleTho
                 {showModelDropdown && (
                   <div className={s.modelDropdown} style={{
                     position: 'absolute', bottom: '100%', left: 0, 
-                    backgroundColor: 'var(--bg-1)', border: '1px solid var(--border)',
+                    backgroundColor: 'var(--bg)', border: '1px solid var(--border)',
                     borderRadius: '6px', padding: '4px', zIndex: 10, marginBottom: '4px',
                     width: 'max-content', display: 'flex', flexDirection: 'column', gap: '2px',
                     boxShadow: '0 4px 12px rgba(0,0,0,0.1)'

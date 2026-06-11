@@ -52,6 +52,7 @@ You are given three layers of project context:
   • ONE short, direct question per response — no preamble, no bullet lists.
   • Ask about WHAT or WHY, not HOW (you infer the HOW from the code context).
   • Never ask about anything already visible in the file tree or code context.
+  • You may use `code spans` for file paths or symbol names inside the question.
 
 ━━━ refined_prompt ━━━
   A complete technical specification: which files, what behaviour, what \

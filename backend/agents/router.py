@@ -26,11 +26,21 @@ You must analyze the complexity of the prompt and return one of the following mo
 Respond strictly with a JSON object: {"model": "<model_id>"}
 """
 
+_VALID_MODELS = {
+    "gpt-5.4-mini",
+    "gpt-5.4-low-effort",
+    "gpt-5.4-high-effort",
+    "gpt-5.5-low-effort",
+    "gpt-5.5-high-effort",
+}
+_DEFAULT = "gpt-5.4-high-effort"
+
+
 async def classify(prompt: str) -> ModelId:
     """Return the model ID best suited for this prompt."""
     key = retrieve_openai_key()
     if not key:
-        return "gpt-5.4-high-effort" # Fallback if no key (though it would fail later anyway)
+        return _DEFAULT
 
     client = AsyncOpenAI(api_key=key)
     try:
@@ -45,7 +55,10 @@ async def classify(prompt: str) -> ModelId:
         )
         raw = response.choices[0].message.content
         data = json.loads(raw)
-        return data.get("model", "gpt-5.4-high-effort")
+        selected = data.get("model", _DEFAULT)
+        if selected not in _VALID_MODELS:
+            return _DEFAULT
+        return selected
     except Exception:
-        return "gpt-5.4-high-effort"
+        return _DEFAULT
 

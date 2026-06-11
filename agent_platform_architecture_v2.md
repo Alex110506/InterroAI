@@ -97,19 +97,36 @@ Once the prompt is finalized through the "Interrogate Me" phase, the platform de
 
 ## 6. Coding Agent Architecture: "Plan -> Code -> Verify" Cycle
 
-When a programming task reaches the large model/supervisor, it is forced by the system design to follow a rigorous three-step algorithm to ensure production-level code quality.
+The execution phase is handled by a high-reasoning model (Coding Agent) that operates within a structured environment. To ensure production-grade stability and code quality, the system enforces a rigorous multi-step lifecycle.
 
-### Phase A: Planning
-Before modifying any file, the model receives the full context and generates an **Attack Plan**. This plan describes which files will be created, which functions will be modified, and what the implementation logic is.
+### A. Context Orchestration: The XML Knowledge Tree
+Instead of sending raw, unorganized text, the platform assembles a dynamic **Knowledge Tree** for the agent. This structure uses XML tags to provide clear boundaries and high semantic density:
+*   **System Instructions (The Rules):** Defines the project's coding standards (e.g., "Use async FastAPI patterns," "Strict type-hinting," "Repository pattern implementation").
+*   **The Repo Map (Skeleton):** A high-level overview of the codebase using class and function signatures (extracted via AST parsers). This allows the model to understand global dependencies without reading every file in full.
+*   **Target Files:** The specific files marked for modification or creation, wrapped in `<file path="...">` tags.
+*   **Specific Context (RAG):** Relevant internal documentation, DDL schemas (critical for database tasks), or connected API routes retrieved from the vector database.
 
-### Phase B: Modification via Unified Diff Blocks
-To avoid fully rewriting large files, the model is instructed to return only the blocks that undergo changes using a clear `SEARCH`/`REPLACE` structure.
+### B. The Three-Phase Execution Workflow
+The agent is forced to follow a **Chain-of-Thought (CoT)** pattern, separating architectural thinking from implementation.
 
-### Phase C: Verification Loop
-After applying modifications, the backend autonomously runs local utilities:
-1.  **Syntax Check (Linter):** Running static analysis utilities.
-2.  **Test Execution (Unit Testing):** Launching the project's local test suite.
-3.  **Autonomous Correction:** If tests fail, errors are sent back to the coding model for an auto-correction loop of up to 3 attempts.
+1.  **Phase 1: Planning (Attack Plan):**
+    The agent must first generate a **Plan of Attack** in Markdown. It describes which files will be modified, what logic will be added, and how it affects the system. This allows for a checkpoint where execution can be halted if the logic is flawed.
+2.  **Phase 2: Implementation via Unified Diffs:**
+    To optimize speed and prevent code loss, the agent does not rewrite entire files. Instead, it uses a **Search & Replace XML block** format (similar to Aider/Cursor).
+    *   *Example:* `<change><search>old_code</search><replace>new_code</replace></change>`
+    The Python backend parses these blocks and applies modifications programmatically.
+3.  **Phase 3: Automated Validation (The Sandbox Loop):**
+    The system enters a background verification cycle:
+    *   **Linter/Syntax Check:** Runs static analysis tools (e.g., `flake8`, `mypy`, `ruff`) over modified files.
+    *   **Automated Testing:** Launches the local test suite (e.g., `pytest`) in an isolated environment.
+    *   **Self-Correction:** If errors occur (non-zero exit codes), the `stderr` is captured and sent back to the agent: *"Your code produced this error: [Error]. Please correct it."* The agent has up to 3 autonomous attempts to fix the code before finalizing.
+
+### C. Agent Toolset (Function Calling)
+The Coding Agent is equipped with a specialized set of tools to interact with the workspace:
+*   `read_file(path, line_start, line_end)`: Surgical reading of specific code segments.
+*   `write_file(path, content)`: Creating new modules or documentation.
+*   `patch_file(path, search_block, replace_block)`: Applying targeted modifications to existing files.
+*   `search_grep(pattern)`: Global workspace search for variable definitions or function usages.
 
 ---
 

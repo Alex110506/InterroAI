@@ -1,14 +1,23 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import Sidebar from './components/Sidebar'
 import ChatPanel from './components/ChatPanel'
 import ThoughtPanel from './components/ThoughtPanel'
 import SettingsModal from './components/SettingsModal'
+import RunningWave from './components/RunningWave'
 import { api } from './lib/api'
 
 export default function App() {
   const [projects, setProjects] = useState([])
   const [activeId, setActiveId] = useState(null)
   const [thoughtOpen, setThoughtOpen] = useState(true)
+  const [thoughtEvents, setThoughtEvents] = useState([])
+  const [modelRunning, setModelRunning] = useState(false)
+
+  const onThoughtEvent = useCallback((event) => {
+    setThoughtEvents((prev) => [...prev, event])
+  }, [])
+
+  const clearThought = useCallback(() => setThoughtEvents([]), [])
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settings, setSettings] = useState({ name: '', hasApiKey: false })
 
@@ -126,8 +135,13 @@ export default function App() {
         projects={projects}
         thoughtOpen={thoughtOpen}
         onToggleThought={() => setThoughtOpen((o) => !o)}
+        onThoughtEvent={onThoughtEvent}
+        clearThought={clearThought}
+        onBusyChange={setModelRunning}
       />
-      <ThoughtPanel isOpen={thoughtOpen} />
+      <ThoughtPanel isOpen={thoughtOpen} events={thoughtEvents} />
+
+      <RunningWave active={modelRunning} />
 
       {settingsOpen && (
         <SettingsModal
