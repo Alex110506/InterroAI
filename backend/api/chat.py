@@ -4,7 +4,7 @@ Chat WebSocket endpoint.
 Every message goes through a pipeline:
 
   Step 1 — Intent classification (3-way):
-    gpt-4o-mini classifies the user's request as one of:
+    gpt-5.4-mini classifies the user's request as one of:
       • "answer"      — general question; reply directly with Markdown
       • "interrogate" — ambiguous implementation request; use GrillAgent
       • "implement"   — clear implementation task; go straight to coder
@@ -71,7 +71,7 @@ async def _classify_intent(user_message: str, project_index: dict) -> str:
     client = AsyncOpenAI(api_key=key)
     try:
         response = await client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-5.4-mini",
             messages=[
                 {"role": "system", "content": f"{_INTENT_SYSTEM}\n\n{context}"},
                 {"role": "user", "content": user_message},

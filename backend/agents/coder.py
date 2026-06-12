@@ -38,15 +38,16 @@ _MAX_CORRECTIONS = 3
 
 # Map display-facing model IDs to real OpenAI API model IDs
 _MODEL_MAP: dict[str, str] = {
-    "gpt-5.4-mini":        "gpt-4o-mini",
-    "gpt-5.4-low-effort":  "gpt-4o",
-    "gpt-5.4-high-effort": "gpt-4o",
-    "gpt-5.5-low-effort":  "gpt-4o",
-    "gpt-5.5-high-effort": "o1",
+    "gpt-5.4-mini":        "gpt-5.4-mini",
+    "gpt-5.4-low-effort":  "gpt-5.4",
+    "gpt-5.4-high-effort": "gpt-5.4",
+    "gpt-5.5-low-effort":  "gpt-5.5",
+    "gpt-5.5-high-effort": "gpt-5.5",
 }
 
-# Reasoning models require temperature to be omitted (fixed at 1)
-_REASONING_MODELS = {"o1", "o1-mini", "o1-preview", "o3", "o3-mini", "o4-mini"}
+# Reasoning models require temperature to be omitted
+# gpt-5.4 and gpt-5.5 are high-reasoning models — omit temperature to avoid API errors
+_REASONING_MODELS = {"gpt-5.5", "gpt-5.4", "o1", "o1-mini", "o1-preview", "o3", "o3-mini", "o4-mini"}
 
 # ── Tool schemas ──────────────────────────────────────────────────────────────
 
