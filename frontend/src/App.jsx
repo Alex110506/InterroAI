@@ -3,7 +3,7 @@ import Sidebar from './components/Sidebar'
 import ChatPanel from './components/ChatPanel'
 import ThoughtPanel from './components/ThoughtPanel'
 import SettingsModal from './components/SettingsModal'
-import RunningWave from './components/RunningWave'
+
 import { api } from './lib/api'
 
 export default function App() {
@@ -11,7 +11,7 @@ export default function App() {
   const [activeId, setActiveId] = useState(null)
   const [thoughtOpen, setThoughtOpen] = useState(true)
   const [thoughtEvents, setThoughtEvents] = useState([])
-  const [modelRunning, setModelRunning] = useState(false)
+
 
   const onThoughtEvent = useCallback((event) => {
     setThoughtEvents((prev) => [...prev, event])
@@ -137,11 +137,11 @@ export default function App() {
         onToggleThought={() => setThoughtOpen((o) => !o)}
         onThoughtEvent={onThoughtEvent}
         clearThought={clearThought}
-        onBusyChange={setModelRunning}
+
       />
       <ThoughtPanel isOpen={thoughtOpen} events={thoughtEvents} />
 
-      <RunningWave active={modelRunning} />
+
 
       {settingsOpen && (
         <SettingsModal

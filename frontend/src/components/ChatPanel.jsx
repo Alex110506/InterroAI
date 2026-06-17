@@ -158,7 +158,7 @@ const MODELS = [
 ]
 
 /* ─── Main ChatPanel ─────────────────────────────────────────────────── */
-export default function ChatPanel({ activeId, projects, thoughtOpen, onToggleThought, onThoughtEvent, clearThought, onBusyChange }) {
+export default function ChatPanel({ activeId, projects, thoughtOpen, onToggleThought, onThoughtEvent, clearThought }) {
   const [input, setInput] = useState('')
   const [selectedModel, setSelectedModel] = useState('auto')
   const [showModelDropdown, setShowModelDropdown] = useState(false)
@@ -171,10 +171,7 @@ export default function ChatPanel({ activeId, projects, thoughtOpen, onToggleTho
 
   const project = projects.find((p) => p.id === activeId) ?? null
 
-  /* ── Surface "model is working" state to the app shell (drives RunningWave) ── */
-  useEffect(() => {
-    onBusyChange?.(isLoading || phase === 'ready')
-  }, [isLoading, phase, onBusyChange])
+
 
   /* ── Auto-resize textarea ── */
   useEffect(() => {

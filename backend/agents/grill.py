@@ -1,7 +1,7 @@
 """
 Grill Agent — Proactive requirement clarification (Section 4 of architecture spec).
 
-Drives an iterative interrogation session using gpt-4o-mini with a three-level
+Drives an iterative interrogation session using gpt-5.4-mini with a three-level
 hybrid context:
   1. Project file tree   — structural understanding of the workspace.
   2. Git context         — current branch and recently modified files.
@@ -26,7 +26,7 @@ from core.security import retrieve_openai_key
 from core.vector_store import search_chunks
 
 _MODEL = "gpt-4o-mini"
-_MAX_TURNS = 3          # cap on clarifying questions before forcing ready
+_MAX_TURNS = 5          # cap on clarifying questions before forcing ready
 _RAG_RESULTS = 8        # chunks to retrieve per query
 _TREE_MAX_DEPTH = 4     # how many levels of the file tree to render
 

@@ -30,9 +30,6 @@ _HERE = Path(__file__).parent
 _DATA_PATH = _HERE / "prompt_examples_dataset.csv"
 _MODEL_PATH = _HERE / "router_model.joblib"
 
-# Dataset's 3 complexity buckets → the 3 display tiers the agent layer expects.
-# The 2 omitted tiers (gpt-5.4-low-effort, gpt-5.5-low-effort) are still reachable
-# via the manual dropdown; they collapse to the same API models anyway.
 _COMPLEXITY_TO_TIER: dict[str, str] = {
     "low":    "gpt-5.4-mini",
     "medium": "gpt-5.4-high-effort",
@@ -84,7 +81,7 @@ def _build_pipeline() -> Pipeline:
             max_iter=2000,
             class_weight="balanced",
             C=2.0,
-            solver="lbfgs",  # multinomial-native; liblinear is binary-only
+            solver="lbfgs",
         )),
     ])
 
@@ -107,7 +104,6 @@ def main() -> None:
 
     print(f"\nTRAIN accuracy: {pipeline.score(X_train, y_train):.3f}")
     print(f"TEST  accuracy: {pipeline.score(X_test, y_test):.3f}")
-    print()
     print(classification_report(y_test, pipeline.predict(X_test), digits=3))
 
     joblib.dump(pipeline, _MODEL_PATH, compress=3)

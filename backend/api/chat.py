@@ -89,9 +89,6 @@ async def _classify_intent(user_message: str, project_index: dict) -> str:
         return "implement"
 
 
-# _answer_question has been removed. We now route Q&A directly to the CoderAgent
-# so it has access to file reading and search tools.
-
 
 # ── WebSocket handler ─────────────────────────────────────────────────────────
 
