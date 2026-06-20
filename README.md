@@ -7,7 +7,7 @@ InterroAI is a local desktop AI multi-agent orchestration platform. It is design
 - **Frontend:** React 18, Vite, and Electron. It provides native window management and an interactive chat interface.
 - **Backend:** Python 3.11+ with FastAPI. It uses asynchronous HTTP endpoints and WebSockets to drive the orchestration of the agents.
 
-## Current Features (Implemented)
+## Features
 
 1. **Initial Project Indexing & Semantic RAG**
    - Two-phase asynchronous project indexing: 
@@ -24,13 +24,6 @@ InterroAI is a local desktop AI multi-agent orchestration platform. It is design
    - *Phase 3 (Verify):* A local sandbox invokes static analysis (`ruff`) and local test suites (`pytest`), feeding errors back to the model for autonomous self-correction (up to 3 attempts).
 5. **Secure Credential Management**
    - To ensure maximum security, OpenAI API keys are not stored in plaintext config files. InterroAI uses the OS-native keychain (via Python's `keyring` module), ensuring keys are encrypted at rest (macOS Keychain, Windows Credential Locker, etc.).
-
-## Roadmap / Planned Features (Not Yet Implemented)
-
-While described in the original architectural concepts, the following features are currently pending implementation:
-- **Security Guardrail Agent (DevSecOps):** A dedicated agent to scan generated code blocks for vulnerabilities before they are written to disk.
-- **Agent Graph Visualization:** Real-time visual graph rendering in the UI (e.g., via React Flow) to show how tasks are delegated.
-- **Time-Travel Rollback (Safety System):** An automatic local snapshot or Git branching system to easily undo AI-generated modifications.
 
 ## Local Development & Setup
 
