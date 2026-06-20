@@ -47,7 +47,3 @@ Make sure you have Node.js and Python 3.11+ installed.
    npm run dev
    ```
    This will simultaneously start the FastAPI backend, the Vite development server, and launch the Electron application.
-
----
-
-For deeper technical insight, see `agent_platform_architecture_v2.md` and `CLAUDE.md` in the root of the repository.
