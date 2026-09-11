@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { FileCode2, Search, FilePlus, Pencil, CheckCircle2, XCircle, RefreshCw } from 'lucide-react'
+import { FileCode2, Search, FilePlus, Pencil, CheckCircle2, XCircle, MinusCircle, RefreshCw } from 'lucide-react'
 import s from './ThoughtPanel.module.css'
 
 const TOOL_ICONS = {
@@ -63,15 +63,28 @@ function ToolEntry({ event }) {
 }
 
 function ValidationEntry({ event }) {
-  const { phase, passed, output } = event
+  // `status` distinguishes a check that ran and passed from one that never ran.
+  // Older events only carried `passed`, so fall back to that.
+  const { phase, passed, output, status } = event
+  const state = status ?? (passed ? 'passed' : 'failed')
   const label = phase === 'lint' ? 'Linter' : 'Tests'
+
+  const rowClass = { passed: s.validPass, failed: s.validFail, skipped: s.validSkip }[state]
+  const icon = {
+    passed: <CheckCircle2 size={12} strokeWidth={2} />,
+    failed: <XCircle size={12} strokeWidth={2} />,
+    skipped: <MinusCircle size={12} strokeWidth={2} />,
+  }[state]
+
+  // A skipped check shows its reason ("ruff is not installed"); a passing one
+  // has nothing worth reporting.
+  const showOutput = state !== 'passed' && output
+
   return (
-    <div className={`${s.validRow} ${passed ? s.validPass : s.validFail}`}>
-      <span className={s.validIcon}>
-        {passed ? <CheckCircle2 size={12} strokeWidth={2} /> : <XCircle size={12} strokeWidth={2} />}
-      </span>
-      <span className={s.validLabel}>{label} — {passed ? 'passed' : 'failed'}</span>
-      {!passed && output && (
+    <div className={`${s.validRow} ${rowClass}`}>
+      <span className={s.validIcon}>{icon}</span>
+      <span className={s.validLabel}>{label} — {state}</span>
+      {showOutput && (
         <pre className={s.validOutput}>{output.length > 600 ? output.slice(0, 600) + '\n…' : output}</pre>
       )}
     </div>

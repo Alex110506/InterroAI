@@ -1,14 +1,12 @@
-# Node/Frontend
+# Node (legacy frontend build output)
 node_modules/
 dist/
 build/
 .vite/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
 
 # Python/Backend
 __pycache__/
+*.egg-info/
 *.py[cod]
 *$py.class
 *.so
@@ -18,6 +16,10 @@ env/
 .env/
 pip-log.txt
 pip-delete-this-directory.txt
+.coverage
+htmlcov/
+.pytest_cache/
+.ruff_cache/
 
 # Local Vector Store (ChromaDB)
 # If ChromaDB stores data locally inside the project, ignore it

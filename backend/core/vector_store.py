@@ -6,24 +6,36 @@ absolute path.  Chunks are upserted so re-indexing a project is idempotent.
 """
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 
 import chromadb
 
+logger = logging.getLogger(__name__)
+
 _STORE_DIR = Path.home() / ".interroai" / "chroma"
 
 
 def _collection_name(project_path: str) -> str:
-    """Convert an absolute path to a valid ChromaDB collection name (3-63 chars)."""
+    """
+    Convert an absolute path to a valid ChromaDB collection name.
+
+    Chroma requires 3-63 characters from [a-zA-Z0-9._-] that both *start and
+    end* with an alphanumeric. The end-anchor is easy to miss: padding a short
+    name with "_" or truncating at 63 characters mid-separator both produce a
+    trailing "_" that Chroma rejects outright.
+    """
     safe = re.sub(r"[^a-zA-Z0-9_-]", "_", project_path).strip("_-")
     if not safe:
         safe = "project"
     # Must not start with a digit
     if safe[0].isdigit():
         safe = "p_" + safe
-    name = safe[:63]
-    return name.ljust(3, "_")   # Chroma requires ≥ 3 chars
+    # Truncation can land on a separator, so re-strip afterwards.
+    name = safe[:63].rstrip("_-")
+    # Pad with an alphanumeric, never "_", so the end-anchor still holds.
+    return name.ljust(3, "0")
 
 
 def _client() -> chromadb.ClientAPI:
@@ -57,6 +69,24 @@ def store_chunks(
             for c in chunks
         ],
     )
+
+
+def collection_size(project_path: str) -> int:
+    """
+    Number of chunks already stored for *project_path*.
+
+    Lets a caller skip a re-embed it would only pay for again: chunks are
+    upserted, so re-indexing an unchanged project produces identical vectors
+    at full API cost. Returns 0 when nothing has been indexed yet.
+    """
+    try:
+        col = _client().get_or_create_collection(_collection_name(project_path))
+        return col.count()
+    except Exception:
+        # A corrupt or unreadable store should send the caller down the
+        # "needs indexing" path, not crash it.
+        logger.warning("Could not read the vector store for %r.", project_path, exc_info=True)
+        return 0
 
 
 def search_chunks(

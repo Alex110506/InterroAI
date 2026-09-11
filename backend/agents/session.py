@@ -1,0 +1,345 @@
+"""
+Chat session — the agent pipeline, independent of any transport.
+
+One user message flows through three steps:
+
+  Step 1 — Intent classification (3-way):
+    gpt-5.4-mini classifies the user's request as one of:
+      • "answer"      — general question; reply directly with Markdown
+      • "interrogate" — ambiguous implementation request; use GrillAgent
+      • "implement"   — clear implementation task; go straight to coder
+
+  Step 2 — Model selection:
+    The caller picks the model explicitly; we validate the ID against the
+    coder's model map and reject anything unknown.
+
+  Step 3 — Route:
+    • answer:      Q&A agent, then finish
+    • interrogate: GrillAgent → refined prompt → coder
+    • implement:   coder directly
+
+`ChatSession` owns that flow and emits plain dict events. `api/chat.py` relays
+them as WebSocket frames; `cli/` renders them to the terminal. Neither the
+WebSocket nor the terminal appears below this line — which is the point: the
+pipeline had previously grown inside a WebSocket handler and could not be
+driven any other way.
+
+A session is single-request and disposable, but not amnesiac: the caller hands
+it the conversation so far as `history`, so a follow-up like "sure" or "now do
+the same for the other file" resolves against what was already said. Nothing is
+persisted — the transcript lives in the caller's memory and dies with it.
+"""
+from __future__ import annotations
+
+import json
+import logging
+from collections.abc import AsyncIterator
+
+from agents import supervisor
+from agents.coder import _MODEL_MAP as _CODER_MODEL_MAP
+from agents.grill import GrillAgent, _fmt_git, _fmt_tree
+from core.errors import InterroAIError
+from core.llm import FAST_TIMEOUT, chat_completion, get_client
+
+logger = logging.getLogger(__name__)
+
+# Used when the caller omits a model entirely. Any value that *is* supplied
+# must be a known display ID — we reject unknown ones rather than silently
+# substituting a different (possibly pricier) model.
+_DEFAULT_MODEL = "gpt-5.4-high-effort"
+
+#: Display IDs a caller may choose from, best-first. The CLI's `/model` picker
+#: and the backend's validation therefore cannot drift apart.
+AVAILABLE_MODELS: tuple[str, ...] = (
+    "gpt-5.5-high-effort",
+    "gpt-5.5-low-effort",
+    "gpt-5.4-high-effort",
+    "gpt-5.4-low-effort",
+    "gpt-5.4-mini",
+)
+
+_INTENT_SYSTEM = """\
+You are a routing agent for an AI coding assistant. Classify the user's request into exactly one of three actions:
+
+1. "answer" — The user is asking a general question, requesting an explanation, or having a conversation.
+   They are NOT asking to build, change, fix, or implement anything in the codebase.
+
+2. "interrogate" — The user wants to implement/build/fix/modify something in the codebase,
+   BUT the request is vague or ambiguous and needs clarification before a developer can act on it.
+
+3. "implement" — The user wants to implement/build/fix/modify something in the codebase,
+   AND the request is already specific and clear enough for a developer to act on without further questions.
+
+A reply may be short and depend entirely on the conversation so far ("sure", "yes, do that",
+"the second one"). Read it in the context of the earlier turns and classify what the user is
+actually asking for, not the literal words in isolation.
+
+Respond strictly with JSON: {"action": "answer"} or {"action": "interrogate"} or {"action": "implement"}
+"""
+
+#: How much prior conversation to carry, in characters, newest first. Context
+#: is what makes "sure" mean something; an unbounded transcript is what makes
+#: the twentieth request cost twenty times the first. This bounds the trade.
+_MAX_HISTORY_CHARS = 12_000
+
+
+def trim_history(history: list[dict] | None) -> list[dict]:
+    """Return the most recent turns that fit inside `_MAX_HISTORY_CHARS`."""
+    if not history:
+        return []
+
+    kept: list[dict] = []
+    budget = _MAX_HISTORY_CHARS
+    for turn in reversed(history):
+        cost = len(turn.get("content") or "")
+        if cost > budget:
+            break
+        budget -= cost
+        kept.append(turn)
+    kept.reverse()
+    return kept
+
+_VALID_ACTIONS = ("answer", "interrogate", "implement")
+
+
+def is_known_model(model: str) -> bool:
+    """True when *model* is a display ID the coder can resolve."""
+    return model in _CODER_MODEL_MAP
+
+
+def unknown_model_message(model: str) -> str:
+    return (
+        f"Unknown model {model!r}. "
+        f"Expected one of: {', '.join(sorted(_CODER_MODEL_MAP))}."
+    )
+
+
+async def classify_intent(
+    user_message: str,
+    project_index: dict,
+    history: list[dict] | None = None,
+) -> str:
+    """
+    3-way intent classifier. Returns: 'answer' | 'interrogate' | 'implement'.
+
+    *history* is the conversation so far. Without it a reply like "sure" has no
+    meaning to classify, and the router guesses.
+
+    Only *unusable model output* falls back to 'implement'. A missing API key or
+    an unreachable provider propagates: those are the user's real problem, and
+    routing past them just produces a second, more confusing failure downstream.
+    """
+    tree_str = _fmt_tree(project_index.get("file_tree") or {})
+    git_str = _fmt_git(project_index.get("git_context") or {})
+    context = f"PROJECT STRUCTURE:\n{tree_str or '(empty)'}\n\nGIT CONTEXT:\n{git_str}"
+
+    client = get_client(FAST_TIMEOUT)
+    response = await chat_completion(
+        client,
+        model="gpt-5.4-mini",
+        messages=[
+            {"role": "system", "content": f"{_INTENT_SYSTEM}\n\n{context}"},
+            *trim_history(history),
+            {"role": "user", "content": user_message},
+        ],
+        response_format={"type": "json_object"},
+        temperature=0.0,
+    )
+
+    raw = response.choices[0].message.content
+    try:
+        action = json.loads(raw or "").get("action")
+    except (json.JSONDecodeError, AttributeError):
+        logger.warning(
+            "Intent classifier returned unparseable JSON (%r) — defaulting to 'implement'.",
+            raw,
+        )
+        return "implement"
+
+    if action not in _VALID_ACTIONS:
+        logger.warning(
+            "Intent classifier returned unknown action %r — defaulting to 'implement'.",
+            action,
+        )
+        return "implement"
+    return action
+
+
+class ChatSession:
+    """
+    One user request, from classification through to a finished implementation.
+
+    Usage:
+
+        session = ChatSession(project_path, project_index, model, history)
+        async for event in session.start("add retries to the uploader"):
+            render(event)
+
+        while session.awaiting_answer:
+            async for event in session.answer(read_user_input()):
+                render(event)
+
+    `awaiting_answer` is True exactly when the last stream ended on a
+    `question` event, so the caller knows an answer is expected rather than a
+    new request. `finished` is True once the work is done and the session
+    should be thrown away.
+    """
+
+    def __init__(
+        self,
+        project_path: str,
+        project_index: dict | None = None,
+        model: str | None = None,
+        history: list[dict] | None = None,
+    ) -> None:
+        self.project_path = project_path
+        self.project_index = project_index or {}
+        self.model = model or _DEFAULT_MODEL
+        self.history = trim_history(history)
+        self.finished = False
+        self.awaiting_answer = False
+        self._grill: GrillAgent | None = None
+        self._turn = 0
+
+    # ── Public entry points ───────────────────────────────────────────────
+
+    async def start(self, user_message: str) -> AsyncIterator[dict]:
+        """Classify *user_message* and route it. Yields the resulting events."""
+        if not is_known_model(self.model):
+            # Deliberately non-terminal: the caller can pick a valid model and
+            # carry on with the same session rather than starting over.
+            yield {"type": "error", "message": unknown_model_message(self.model)}
+            return
+
+        logger.info("User selected model: %s", self.model)
+
+        async for event in self._guard(self._route(user_message)):
+            yield event
+
+    async def answer(self, user_message: str) -> AsyncIterator[dict]:
+        """Feed the user's reply to the last clarifying question."""
+        if self._grill is None:
+            yield {"type": "error", "message": "No active session."}
+            return
+
+        self.awaiting_answer = False
+
+        async def _run() -> AsyncIterator[dict]:
+            result = await self._grill.answer(user_message)
+            async for event in self._dispatch_or_ask(result):
+                yield event
+
+        async for event in self._guard(_run()):
+            yield event
+
+    async def force_ready(self) -> AsyncIterator[dict]:
+        """Stop asking questions and implement from what has been gathered."""
+        if self._grill is None:
+            yield {"type": "error", "message": "No active session."}
+            return
+
+        self.awaiting_answer = False
+
+        async def _run() -> AsyncIterator[dict]:
+            result = await self._grill._force_ready()
+            final_prompt = result.get("refined_prompt", "")
+            async for event in self._implement(final_prompt, did_interrogate=self._turn > 0):
+                yield event
+
+        async for event in self._guard(_run()):
+            yield event
+
+    # ── Routing ───────────────────────────────────────────────────────────
+
+    async def _route(self, user_message: str) -> AsyncIterator[dict]:
+        action = await classify_intent(user_message, self.project_index, self.history)
+        logger.info("Intent classified: %r", action)
+
+        if action == "answer":
+            yield {
+                "type": "ready",
+                "refined_prompt": user_message,
+                "did_interrogate": False,
+            }
+            logger.info("Dispatching to Q&A agent | model=%r", self.model)
+            async for event in self._stream_agent(user_message, intent="answer"):
+                yield event
+            return
+
+        if action == "interrogate":
+            self._grill = GrillAgent(
+                project_path=self.project_path,
+                project_index=self.project_index,
+                history=self.history,
+            )
+            result = await self._grill.start(user_message)
+            async for event in self._dispatch_or_ask(result):
+                yield event
+            return
+
+        # "implement"
+        async for event in self._implement(user_message, did_interrogate=False):
+            yield event
+
+    async def _dispatch_or_ask(self, grill_result: dict) -> AsyncIterator[dict]:
+        """Either the grill is satisfied (implement) or it has another question."""
+        if grill_result.get("is_prompt_ready"):
+            async for event in self._implement(
+                grill_result.get("refined_prompt", ""),
+                did_interrogate=self._turn > 0,
+            ):
+                yield event
+            return
+
+        self._turn += 1
+        self.awaiting_answer = True
+        yield {
+            "type": "question",
+            "question": grill_result.get("question", ""),
+            "turn": self._turn,
+        }
+
+    async def _implement(self, prompt: str, *, did_interrogate: bool) -> AsyncIterator[dict]:
+        yield {
+            "type": "ready",
+            "refined_prompt": prompt,
+            "did_interrogate": did_interrogate,
+        }
+        logger.info(
+            "Dispatching to coder | project=%r | model=%r", self.project_path, self.model
+        )
+        async for event in self._stream_agent(prompt, intent="implement"):
+            yield event
+
+    async def _stream_agent(self, prompt: str, *, intent: str) -> AsyncIterator[dict]:
+        async for event in supervisor.stream(
+            prompt, self.project_path, self.model, intent=intent, history=self.history
+        ):
+            yield event
+        self.finished = True
+
+    # ── Error handling ────────────────────────────────────────────────────
+
+    async def _guard(self, stream: AsyncIterator[dict]) -> AsyncIterator[dict]:
+        """
+        Turn a failure into a final `error` event.
+
+        Both transports have to render errors for the user regardless, and
+        neither can recover the session once the pipeline has thrown — so the
+        failure is reported here, once, instead of in every caller.
+        """
+        try:
+            async for event in stream:
+                yield event
+        except InterroAIError as exc:
+            # Expected and already phrased for a human (missing key, bad model).
+            logger.info("Chat session ended: %s", exc)
+            self.finished = True
+            yield {"type": "error", "message": str(exc)}
+        except Exception as exc:  # noqa: BLE001
+            # Unexpected: keep the traceback. The caller still gets the message,
+            # since this is a local single-user tool and the alternative is a
+            # dead prompt with no explanation.
+            logger.exception("Unhandled error in chat session")
+            self.finished = True
+            yield {"type": "error", "message": f"Internal error: {exc}"}

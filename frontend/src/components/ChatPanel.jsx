@@ -149,7 +149,6 @@ function ThinkingBubble() {
 }
 
 const MODELS = [
-  { id: 'auto',               label: 'Auto' },
   { id: 'gpt-5.5-high-effort', label: 'GPT-5.5 High Effort' },
   { id: 'gpt-5.5-low-effort',  label: 'GPT-5.5 Low Effort' },
   { id: 'gpt-5.4-high-effort', label: 'GPT-5.4 High Effort' },
@@ -157,10 +156,14 @@ const MODELS = [
   { id: 'gpt-5.4-mini',        label: 'GPT-5.4 Mini' },
 ]
 
+// The model the picker starts on. Must be one of MODELS above — the backend
+// rejects any ID it doesn't recognise.
+const DEFAULT_MODEL = 'gpt-5.4-high-effort'
+
 /* ─── Main ChatPanel ─────────────────────────────────────────────────── */
 export default function ChatPanel({ activeId, projects, thoughtOpen, onToggleThought, onThoughtEvent, clearThought }) {
   const [input, setInput] = useState('')
-  const [selectedModel, setSelectedModel] = useState('auto')
+  const [selectedModel, setSelectedModel] = useState(DEFAULT_MODEL)
   const [showModelDropdown, setShowModelDropdown] = useState(false)
   const [phase, setPhase] = useState('idle')   // 'idle' | 'interrogating' | 'ready'
   const [isLoading, setIsLoading] = useState(false)
@@ -344,7 +347,7 @@ export default function ChatPanel({ activeId, projects, thoughtOpen, onToggleTho
     phase === 'interrogating' ? 'Answer the question…' :
     `Ask about ${project.folderName}…`
 
-  const currentModelLabel = MODELS.find(m => m.id === selectedModel)?.label ?? 'Auto'
+  const currentModelLabel = MODELS.find(m => m.id === selectedModel)?.label ?? selectedModel
 
   /* ── No project selected ── */
   if (!project) {

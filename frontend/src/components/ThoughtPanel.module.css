@@ -175,6 +175,11 @@
   color: #f87171;
 }
 
+/* Neither pass nor fail: the check never ran. */
+.validSkip {
+  color: var(--text-2);
+}
+
 .validIcon {
   flex-shrink: 0;
   display: flex;

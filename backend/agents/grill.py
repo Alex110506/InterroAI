@@ -18,12 +18,14 @@ Stopping criteria (whichever comes first):
 from __future__ import annotations
 
 import json
-
-from openai import AsyncOpenAI
+import logging
 
 from core.embeddings import embed_texts
-from core.security import retrieve_openai_key
+from core.errors import MissingAPIKeyError
+from core.llm import FAST_TIMEOUT, chat_completion, get_client
 from core.vector_store import search_chunks
+
+logger = logging.getLogger(__name__)
 
 _MODEL = "gpt-4o-mini"
 _MAX_TURNS = 5          # cap on clarifying questions before forcing ready
@@ -113,7 +115,7 @@ class GrillAgent:
     Stateful interrogation session for a single user request.
 
     Usage:
-        agent = GrillAgent(project_path, project_index)
+        agent = GrillAgent(project_path, project_index, history)
         result = await agent.start(initial_prompt)
         # result: {"is_prompt_ready": bool, "question"/"refined_prompt": ...}
 
@@ -121,9 +123,18 @@ class GrillAgent:
             result = await agent.answer(user_answer)
     """
 
-    def __init__(self, project_path: str, project_index: dict) -> None:
+    def __init__(
+        self,
+        project_path: str,
+        project_index: dict,
+        history: list[dict] | None = None,
+    ) -> None:
         self._path = project_path
         self._index = project_index or {}
+        # Earlier turns of the wider conversation. Kept apart from `_history`
+        # (this interrogation's own transcript) so `start()` can lay them down
+        # first without them being mistaken for answers to a question.
+        self._prior: list[dict] = list(history or [])
         self._history: list[dict] = []
         self._turns = 0
 
@@ -137,7 +148,19 @@ class GrillAgent:
             embeddings = await embed_texts([query])
             chunks = search_chunks(self._path, embeddings[0], n=_RAG_RESULTS)
             rag_str = _fmt_chunks(chunks)
+        except MissingAPIKeyError:
+            # Not a RAG problem. Reporting it as one would send the user hunting
+            # through their index while the real cause is an unset API key.
+            raise
         except Exception:
+            # RAG is genuinely optional here — the tree and git context are
+            # still enough to ask a sensible question — but log the trace so a
+            # persistently broken vector store is visible rather than inferred.
+            logger.warning(
+                "Vector search failed for project %r; continuing without RAG context.",
+                self._path,
+                exc_info=True,
+            )
             rag_str = "Vector search unavailable (project may not be fully indexed yet)."
 
         return (
@@ -149,12 +172,9 @@ class GrillAgent:
     # ── OpenAI call ───────────────────────────────────────────────────────────
 
     async def _call(self) -> dict:
-        key = retrieve_openai_key()
-        if not key:
-            raise ValueError("No OpenAI API key configured — add yours in Settings.")
-
-        client = AsyncOpenAI(api_key=key)
-        response = await client.chat.completions.create(
+        client = get_client(FAST_TIMEOUT)
+        response = await chat_completion(
+            client,
             model=_MODEL,
             messages=[
                 {"role": "system", "content": _SYSTEM_PROMPT},
@@ -177,7 +197,8 @@ class GrillAgent:
         """Begin the session with the user's initial prompt."""
         context = await self._build_context(user_prompt)
         self._history = [
-            {"role": "user", "content": f"{context}\n\nUSER REQUEST:\n{user_prompt}"}
+            *self._prior,
+            {"role": "user", "content": f"{context}\n\nUSER REQUEST:\n{user_prompt}"},
         ]
         return await self._call()
 

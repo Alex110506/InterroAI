@@ -1,18 +1,21 @@
 """
-InterroAI — FastAPI backend.
-Async server and WebSocket connection management (Section 6 of architecture spec).
+InterroAI — optional HTTP surface.
 
-Run in development:
+The CLI (`cli/main.py`) is the primary frontend and drives the pipeline
+in-process; this module exposes the same pipeline over HTTP + WebSocket for
+anything that wants to drive it from another process or machine.
+
+Run it with:
+    interroai-backend
     uvicorn main:app --reload --port 8000
 """
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from api.settings import router as settings_router
-from api.projects import router as projects_router
 from api.chat import router as chat_router
-from api.history import router as history_router
+from api.projects import router as projects_router
+from api.settings import router as settings_router
 
 app = FastAPI(
     title="InterroAI",
@@ -20,14 +23,12 @@ app = FastAPI(
     version="0.1.0",
 )
 
-# Allow requests from the Electron renderer in both dev and production modes.
+# Permissive by design: the server binds to 127.0.0.1 and holds one local
+# user's workspace, so the origin of a request carries no authority worth
+# checking. Anything that can reach the port is already on the machine.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",  # Vite dev server
-        "app://.",                # Electron production (custom protocol)
-        "file://",                # Electron production fallback
-    ],
+    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -36,12 +37,15 @@ app.add_middleware(
 app.include_router(settings_router)
 app.include_router(projects_router)
 app.include_router(chat_router)
-app.include_router(history_router)
-
-# Future routers go here:
-# app.include_router(agent_router)
 
 
 @app.get("/health", tags=["meta"])
 async def health() -> dict:
     return {"status": "ok", "version": app.version}
+
+
+def run() -> None:
+    """Console-script entry point (`interroai-backend`) declared in pyproject.toml."""
+    import uvicorn
+
+    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=False)

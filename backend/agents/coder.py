@@ -21,16 +21,24 @@ import json
 import logging
 import re
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from openai import AsyncOpenAI
 
 logger = logging.getLogger(__name__)
 
-from openai import AsyncOpenAI
-
 from core.ast_map import build_repo_map
 from core.embeddings import embed_texts
+from core.errors import (
+    FileNotFoundInProjectError,
+    InterroAIError,
+    PathEscapeError,
+    ToolError,
+)
+from core.llm import LONG_TIMEOUT, chat_completion, chat_stream, get_client
 from core.patcher import apply_patch
 from core.sandbox import run_linter, run_tests
-from core.security import retrieve_openai_key
 from core.vector_store import search_chunks
 
 _MAX_TOOL_ROUNDS = 20
@@ -199,8 +207,17 @@ _SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", "dist", "b
 
 
 class CoderAgent:
-    def __init__(self, project_path: str, model: str, intent: str = "implement") -> None:
+    def __init__(
+        self,
+        project_path: str,
+        model: str,
+        intent: str = "implement",
+        history: list[dict] | None = None,
+    ) -> None:
         self._intent = intent
+        # Prior turns of this conversation, spliced in ahead of the current
+        # request so a follow-up ("now the other one") has a referent.
+        self._history: list[dict] = list(history or [])
         self._path = Path(project_path).resolve()
         self._api_model = _MODEL_MAP.get(model, model)   # resolve display ID → real API ID
         self._is_reasoning = self._api_model in _REASONING_MODELS
@@ -212,17 +229,18 @@ class CoderAgent:
     # ── Public entry point ─────────────────────────────────────────────────
 
     async def execute(self, prompt: str):
-        key = retrieve_openai_key()
-        if not key:
-            yield {"type": "error", "message": "No OpenAI API key configured."}
-            return
-
         if not self._path.is_dir():
             yield {"type": "error", "message": f"Project directory not found: {self._path}"}
             return
 
         logger.info("CoderAgent.execute: project=%r  api_model=%r", str(self._path), self._api_model)
-        self._client = AsyncOpenAI(api_key=key)
+
+        try:
+            self._client = get_client(LONG_TIMEOUT)
+        except InterroAIError as exc:
+            # Expected and actionable (e.g. no API key) — show it as-is.
+            yield {"type": "error", "message": str(exc)}
+            return
 
         try:
             knowledge_tree = await self._build_knowledge_tree()
@@ -231,6 +249,7 @@ class CoderAgent:
                 read_tools = [t for t in _TOOLS if t["function"]["name"] in {"read_file", "search_grep", "search_semantic"}]
                 messages = [
                     {"role": "system", "content": _QA_IMPL_SYSTEM},
+                    *self._history,
                     {"role": "user", "content": f"{knowledge_tree}\n\nQUESTION:\n{prompt}"},
                 ]
                 summary = ""
@@ -251,6 +270,7 @@ class CoderAgent:
             # Phase 2 — Implementation (shared message history so Phase 3 can extend it)
             messages: list[dict] = [
                 {"role": "system", "content": _IMPL_SYSTEM},
+                *self._history,
                 {"role": "user", "content": f"{knowledge_tree}\n\nTASK:\n{prompt}\n\nPLAN:\n{plan}"},
             ]
 
@@ -266,6 +286,10 @@ class CoderAgent:
 
             yield {"type": "done", "summary": summary}
 
+        except InterroAIError as exc:
+            # Deliberate, already-explained failure — no stack trace needed.
+            logger.info("CoderAgent stopped: %s", exc)
+            yield {"type": "error", "message": str(exc)}
         except Exception as exc:
             logger.exception("CoderAgent.execute failed")
             yield {"type": "error", "message": f"Coder agent error: {exc}"}
@@ -281,23 +305,27 @@ class CoderAgent:
     async def _plan(self, prompt: str, knowledge_tree: str):
         messages = [
             {"role": "system", "content": _PLAN_SYSTEM},
+            *self._history,
             {"role": "user", "content": f"{knowledge_tree}\n\nTASK:\n{prompt}"},
         ]
 
         if self._is_reasoning:
             # o1-family doesn't stream reliably — single-shot call
-            response = await self._client.chat.completions.create(
-                **self._build_create_kwargs(messages=messages, temperature=0.2)
+            response = await chat_completion(
+                self._client,
+                **self._build_create_kwargs(messages=messages, temperature=0.2),
             )
             content = response.choices[0].message.content or ""
             yield {"type": "plan_chunk", "chunk": content}
             yield {"type": "plan", "content": content}
             return
 
-        # Streaming: emit tokens as they arrive so the right panel fills live
+        # Streaming: emit tokens as they arrive so the right panel fills live.
+        # Only the handshake is retried; see core.llm.chat_stream.
         full = ""
-        stream = await self._client.chat.completions.create(
-            **self._build_create_kwargs(messages=messages, temperature=0.2, stream=True)
+        stream = await chat_stream(
+            self._client,
+            **self._build_create_kwargs(messages=messages, temperature=0.2),
         )
         async for chunk in stream:
             token = chunk.choices[0].delta.content or ""
@@ -312,13 +340,14 @@ class CoderAgent:
         if tools is None:
             tools = _TOOLS
         for _ in range(_MAX_TOOL_ROUNDS):
-            response = await self._client.chat.completions.create(
+            response = await chat_completion(
+                self._client,
                 **self._build_create_kwargs(
                     messages=messages,
                     temperature=0.1,
                     tools=tools,
                     tool_choice="auto",
-                )
+                ),
             )
             msg = response.choices[0].message
 
@@ -359,27 +388,36 @@ class CoderAgent:
         modified = sorted(self._modified)
 
         if not modified:
-            yield {"type": "validation_result", "phase": "lint", "passed": True, "output": "No files modified."}
+            yield {
+                "type": "validation_result", "phase": "lint",
+                "passed": True, "status": "skipped", "output": "No files modified.",
+            }
             return
 
         for attempt in range(_MAX_CORRECTIONS):
-            lint_ok, lint_out = await run_linter(modified, str(self._path))
-            yield {"type": "validation_result", "phase": "lint", "passed": lint_ok, "output": lint_out}
+            lint = await run_linter(modified, str(self._path))
+            yield {
+                "type": "validation_result", "phase": "lint",
+                "passed": lint.ok, "status": lint.status.value, "output": lint.output,
+            }
 
-            test_ok, test_out = await run_tests(str(self._path))
-            yield {"type": "validation_result", "phase": "test", "passed": test_ok, "output": test_out}
+            test = await run_tests(str(self._path))
+            yield {
+                "type": "validation_result", "phase": "test",
+                "passed": test.ok, "status": test.status.value, "output": test.output,
+            }
 
-            if lint_ok and test_ok:
+            if lint.ok and test.ok:
                 return
 
             if attempt >= _MAX_CORRECTIONS - 1:
                 break
 
             errors = ""
-            if not lint_ok:
-                errors += f"LINTER:\n{lint_out}\n\n"
-            if not test_ok:
-                errors += f"TESTS:\n{test_out}"
+            if not lint.ok:
+                errors += f"LINTER:\n{lint.output}\n\n"
+            if not test.ok:
+                errors += f"TESTS:\n{test.output}"
 
             yield {"type": "correction", "attempt": attempt + 1, "errors": errors}
 
@@ -390,6 +428,19 @@ class CoderAgent:
     # ── Tool execution ─────────────────────────────────────────────────────
 
     async def _run_tool(self, name: str, args: dict) -> str:
+        """
+        Dispatch one tool call and return the result as text for the model.
+
+        Three outcomes, deliberately kept apart:
+          * `ToolError`      — the model's fault and the model's to fix. Hand the
+                               message straight back so it can retry correctly.
+          * `InterroAIError` — terminal for the whole run (no API key). Re-raise;
+                               letting the model "retry" a missing key wastes
+                               tool rounds and hides the real cause.
+          * anything else    — a bug in InterroAI. Log the traceback, then tell
+                               the model plainly rather than leaking internals
+                               into the transcript as if they were its mistake.
+        """
         try:
             if name == "read_file":
                 return self._read_file(
@@ -410,17 +461,24 @@ class CoderAgent:
             if name == "search_semantic":
                 return await self._search_semantic(args.get("query", ""), args.get("n", 5))
             return f"Unknown tool: {name}"
-        except Exception as exc:
-            return f"Tool error: {exc}"
+        except ToolError as exc:
+            logger.info("Tool %r rejected the model's request: %s", name, exc)
+            return f"Error: {exc}"
+        except InterroAIError:
+            raise
+        except Exception:
+            logger.exception("Unexpected failure in tool %r with args %r", name, args)
+            return (
+                f"Internal error while running {name!r}. This is a defect in "
+                "InterroAI, not a problem with your arguments — try a different "
+                "approach."
+            )
 
     async def _search_semantic(self, query: str, n: int = 5) -> str:
-        try:
-            n = min(max(1, int(n)), 10)
-            embeddings = await embed_texts([query])
-            chunks = search_chunks(str(self._path), embeddings[0], n=n)
-            return _fmt_chunks(chunks) if chunks else "No semantically similar code found."
-        except Exception as exc:
-            return f"Semantic search error: {exc}"
+        n = min(max(1, int(n)), 10)
+        embeddings = await embed_texts([query])
+        chunks = search_chunks(str(self._path), embeddings[0], n=n)
+        return _fmt_chunks(chunks) if chunks else "No semantically similar code found."
 
     def _resolve(self, path: str) -> Path:
         resolved = (self._path / path).resolve()
@@ -428,14 +486,14 @@ class CoderAgent:
         # accept "/Users/alex2/..." as a child of "/Users/alex" and trip on
         # trailing-slash edges.
         if resolved != self._path and not resolved.is_relative_to(self._path):
-            raise ValueError(f"Path '{path}' escapes the project directory.")
+            raise PathEscapeError(f"Path '{path}' escapes the project directory.")
         return resolved
 
     def _read_file(self, path: str, line_start: int | None, line_end: int | None) -> str:
         p = self._resolve(path)
         if not p.exists():
-            logger.warning("read_file: not found | path=%r | resolved=%r", path, str(p))
-            return f"File not found: {path}"
+            logger.info("read_file: not found | path=%r | resolved=%r", path, str(p))
+            raise FileNotFoundInProjectError(f"File not found: {path}")
         lines = p.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
         if line_start is not None or line_end is not None:
             s = (line_start or 1) - 1
@@ -455,11 +513,10 @@ class CoderAgent:
 
     def _patch_file(self, path: str, search_block: str, replace_block: str) -> str:
         p = self._resolve(path)
-        ok, err = apply_patch(str(p), search_block, replace_block)
-        if ok:
-            self._modified.add(str(p))
-            return f"Patched: {path}"
-        return f"Patch failed: {err}"
+        # Raises PatchError / FileNotFoundInProjectError, caught by _run_tool.
+        apply_patch(str(p), search_block, replace_block)
+        self._modified.add(str(p))
+        return f"Patched: {path}"
 
     def _search_grep(self, pattern: str, file_glob: str | None) -> str:
         try:

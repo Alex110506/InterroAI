@@ -4,7 +4,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
 from config import app_config
-from core.security import store_openai_key, retrieve_openai_key
+from core.security import retrieve_openai_key, store_openai_key
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
