@@ -3,9 +3,9 @@ Chat WebSocket endpoint.
 
 A transport adapter, nothing more: every frame is turned into a call on a
 `ChatSession` (`agents/session.py`) and every event the session emits is
-relayed back as JSON. The pipeline itself — intent classification, the grill
-loop, dispatch to the coder — lives in the session so the CLI can drive the
-identical flow without a socket.
+relayed back as JSON. The pipeline itself — intent classification, dispatch
+to the coder — lives in the session so the CLI can drive the identical flow
+without a socket.
 
 Client frames:
   {"type": "start",       "project_path", "project_index", "message", "model",
@@ -14,8 +14,6 @@ Client frames:
                                              the server stores no transcript,
                                              so a client that wants follow-ups
                                              to resolve must send its own.
-  {"type": "answer",      "message"}       — reply to a clarifying question
-  {"type": "force_ready"}                  — stop asking, implement now
 """
 from __future__ import annotations
 
@@ -35,41 +33,26 @@ __all__ = ["router", "_DEFAULT_MODEL"]
 @router.websocket("/ws")
 async def chat_ws(websocket: WebSocket) -> None:
     await websocket.accept()
-    session: ChatSession | None = None
 
     try:
         while True:
             payload = await websocket.receive_json()
             msg_type = payload.get("type")
 
-            if msg_type == "start":
-                session = ChatSession(
-                    project_path=payload.get("project_path", ""),
-                    project_index=payload.get("project_index") or {},
-                    model=payload.get("model"),
-                    history=payload.get("history"),
-                )
-                stream = session.start(payload.get("message", ""))
-
-            elif msg_type in {"answer", "force_ready"}:
-                if session is None:
-                    await websocket.send_json(
-                        {"type": "error", "message": "No active session."}
-                    )
-                    continue
-                stream = (
-                    session.answer(payload.get("message", ""))
-                    if msg_type == "answer"
-                    else session.force_ready()
-                )
-
-            else:
+            if msg_type != "start":
                 await websocket.send_json(
                     {"type": "error", "message": f"Unknown message type: {msg_type!r}"}
                 )
                 continue
 
-            async for event in stream:
+            session = ChatSession(
+                project_path=payload.get("project_path", ""),
+                project_index=payload.get("project_index") or {},
+                model=payload.get("model"),
+                history=payload.get("history"),
+            )
+
+            async for event in session.start(payload.get("message", "")):
                 await websocket.send_json(event)
 
             if session.finished:

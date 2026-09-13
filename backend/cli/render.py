@@ -55,23 +55,6 @@ class EventRenderer:
 
     # ── Individual events ─────────────────────────────────────────────────
 
-    def _on_ready(self, event: dict) -> None:
-        # Only worth showing when interrogation actually changed the request;
-        # otherwise it just echoes what the user typed a second ago.
-        if not event.get("did_interrogate"):
-            return
-        self._end_plan_stream()
-        self._console.print(f"\n[label]{BULLET} Refined request[/label]")
-        self._console.print(f"  [hint]{event.get('refined_prompt', '')}[/hint]")
-        self._console.print()
-
-    def _on_question(self, event: dict) -> None:
-        self._end_plan_stream()
-        turn = event.get("turn", 1)
-        self._console.print(f"\n[label]{BULLET} Clarifying question {turn}[/label]")
-        self._console.print(f"  {event.get('question', '')}")
-        self._console.print("  [hint]/skip to stop asking and implement[/hint]")
-
     def _on_plan_chunk(self, event: dict) -> None:
         chunk = event.get("chunk") or ""
         if not chunk:

@@ -2,9 +2,9 @@
 The chat pipeline itself, driven without any transport.
 
 `ChatSession` is what both the CLI and the WebSocket adapter run, so these
-tests pin the routing, the interrogation loop and the error contract once, at
-the level where they actually live. `test_chat.py` covers the WebSocket
-adapter on top; `test_pipeline.py` drives the two end to end.
+tests pin the routing and the error contract once, at the level where they
+actually live. `test_chat.py` covers the WebSocket adapter on top;
+`test_pipeline.py` drives the two end to end.
 """
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ def _queue_intent(monkeypatch, content):
 # ── Intent classification ────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("action", ["answer", "interrogate", "implement"])
+@pytest.mark.parametrize("action", ["answer", "implement"])
 async def test_each_valid_action_is_returned(monkeypatch, action):
     _queue_intent(monkeypatch, json.dumps({"action": action}))
     assert await session.classify_intent("do a thing", {}) == action
@@ -166,32 +166,6 @@ def _fix_intent(monkeypatch, action):
     monkeypatch.setattr(session, "classify_intent", fake_classify)
 
 
-class StubGrill:
-    """Asks `questions` in order, then reports ready."""
-
-    def __init__(self, questions, refined="refined spec"):
-        self._questions = list(questions)
-        self._refined = refined
-
-    async def start(self, prompt):
-        return self._next()
-
-    async def answer(self, message):
-        return self._next()
-
-    async def _force_ready(self):
-        return {"is_prompt_ready": True, "refined_prompt": "forced spec"}
-
-    def _next(self):
-        if self._questions:
-            return {"is_prompt_ready": False, "question": self._questions.pop(0)}
-        return {"is_prompt_ready": True, "refined_prompt": self._refined}
-
-
-def _stub_grill(monkeypatch, questions, refined="refined spec"):
-    monkeypatch.setattr(session, "GrillAgent", lambda **kwargs: StubGrill(questions, refined))
-
-
 async def _drain(stream) -> list[dict]:
     return [event async for event in stream]
 
@@ -228,85 +202,19 @@ async def test_an_answer_goes_straight_to_the_qa_agent(monkeypatch, captured_age
     events = await _drain(chat.start("what does this repo do?"))
 
     assert events[0]["type"] == "ready"
-    assert events[0]["did_interrogate"] is False
     assert captured_agent[0]["intent"] == "answer"
     assert chat.finished is True
 
 
-async def test_a_clear_request_skips_interrogation(monkeypatch, captured_agent):
+async def test_a_clear_request_goes_straight_to_the_coder(monkeypatch, captured_agent):
     _fix_intent(monkeypatch, "implement")
     chat = ChatSession("/tmp/p", {}, model="gpt-5.4-mini")
     events = await _drain(chat.start("rename X to Y in a.py"))
 
-    assert events[0]["did_interrogate"] is False
+    assert events[0]["type"] == "ready"
     assert captured_agent[0]["intent"] == "implement"
     assert captured_agent[0]["prompt"] == "rename X to Y in a.py"
     assert chat.finished is True
-
-
-async def test_a_vague_request_is_interrogated_then_implemented(monkeypatch, captured_agent):
-    _fix_intent(monkeypatch, "interrogate")
-    _stub_grill(monkeypatch, ["which file?"], refined="a complete spec")
-    chat = ChatSession("/tmp/p", {}, model="gpt-5.4-mini")
-
-    events = await _drain(chat.start("make it better"))
-    assert events == [{"type": "question", "question": "which file?", "turn": 1}]
-    assert chat.awaiting_answer is True
-    assert chat.finished is False
-
-    events = await _drain(chat.answer("api/auth.py"))
-    assert events[0]["refined_prompt"] == "a complete spec"
-    assert events[0]["did_interrogate"] is True
-    assert captured_agent[0]["prompt"] == "a complete spec"
-    assert chat.awaiting_answer is False
-    assert chat.finished is True
-
-
-async def test_turn_numbers_increase_across_questions(monkeypatch, captured_agent):
-    _fix_intent(monkeypatch, "interrogate")
-    _stub_grill(monkeypatch, ["q1", "q2", "q3"])
-    chat = ChatSession("/tmp/p", {}, model="gpt-5.4-mini")
-
-    assert (await _drain(chat.start("x")))[0]["turn"] == 1
-    for expected in (2, 3):
-        assert (await _drain(chat.answer("detail")))[0]["turn"] == expected
-
-
-async def test_an_immediately_clear_request_is_not_questioned(monkeypatch, captured_agent):
-    """The grill agent may decide no clarification is needed at all."""
-    _fix_intent(monkeypatch, "interrogate")
-    _stub_grill(monkeypatch, [], refined="already specific")
-    chat = ChatSession("/tmp/p", {}, model="gpt-5.4-mini")
-
-    events = await _drain(chat.start("x"))
-    assert events[0]["type"] == "ready"
-    assert events[0]["did_interrogate"] is False
-
-
-async def test_force_ready_short_circuits_the_questions(monkeypatch, captured_agent):
-    """Backs the CLI's `/skip` — stop asking and implement what we have."""
-    _fix_intent(monkeypatch, "interrogate")
-    _stub_grill(monkeypatch, ["q1", "q2", "q3"])
-    chat = ChatSession("/tmp/p", {}, model="gpt-5.4-mini")
-
-    await _drain(chat.start("x"))
-    events = await _drain(chat.force_ready())
-
-    assert events[0]["refined_prompt"] == "forced spec"
-    assert captured_agent[0]["prompt"] == "forced spec"
-    assert chat.finished is True
-
-
-async def test_answering_without_an_interrogation_is_reported():
-    chat = ChatSession("/tmp/p", {}, model="gpt-5.4-mini")
-    events = await _drain(chat.answer("hi"))
-    assert events == [{"type": "error", "message": "No active session."}]
-
-
-async def test_forcing_ready_without_an_interrogation_is_reported():
-    chat = ChatSession("/tmp/p", {}, model="gpt-5.4-mini")
-    events = await _drain(chat.force_ready())
-    assert events == [{"type": "error", "message": "No active session."}]
 
 
 # ── Error contract ───────────────────────────────────────────────────────────
@@ -345,11 +253,8 @@ async def test_an_unexpected_failure_is_reported_and_logged(monkeypatch, caplog)
     assert chat.finished is True
 
 
-async def test_a_new_session_inherits_no_interrogation_state(monkeypatch, captured_agent):
-    """
-    Sessions are single-use. A fresh one starts with no grill and no turn
-    count, whatever conversation it was handed.
-    """
+async def test_a_new_session_is_independent_of_earlier_ones(monkeypatch, captured_agent):
+    """Sessions are single-use and disposable, whatever conversation they were handed."""
     _fix_intent(monkeypatch, "implement")
 
     first = ChatSession("/tmp/p", {}, model="gpt-5.4-mini")
@@ -361,8 +266,8 @@ async def test_a_new_session_inherits_no_interrogation_state(monkeypatch, captur
     await _drain(second.start("second request"))
 
     assert [c["prompt"] for c in captured_agent] == ["first request", "second request"]
-    assert second._grill is None
-    assert second._turn == 0
+    assert first.finished is True
+    assert second.finished is True
 
 
 # ── Conversation context ─────────────────────────────────────────────────────
@@ -401,22 +306,6 @@ async def test_the_conversation_reaches_the_agent(monkeypatch, captured_agent):
     await _drain(chat.start("sure"))
 
     assert captured_agent[0]["history"] == CONVERSATION
-
-
-async def test_the_conversation_reaches_the_grill_agent(monkeypatch, captured_agent):
-    seen = {}
-
-    def capture(**kwargs):
-        seen.update(kwargs)
-        return StubGrill([], refined="spec")
-
-    _fix_intent(monkeypatch, "interrogate")
-    monkeypatch.setattr(session, "GrillAgent", capture)
-
-    chat = ChatSession("/tmp/p", {}, model="gpt-5.4-mini", history=CONVERSATION)
-    await _drain(chat.start("make it better"))
-
-    assert seen["history"] == CONVERSATION
 
 
 async def test_a_session_with_no_history_still_works(monkeypatch, captured_agent):

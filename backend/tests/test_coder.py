@@ -471,6 +471,54 @@ async def test_knowledge_tree_survives_an_empty_project(tmp_path):
     assert "(empty)" in await a._build_knowledge_tree()
 
 
+async def test_the_repo_map_is_not_rebuilt_for_an_unchanged_project(agent, monkeypatch):
+    """
+    The agent needs the map on every request, and parsing every source file
+    again to produce an identical map was the most expensive thing it did
+    before the first token.
+    """
+    walks = 0
+    real_build = coder_mod.build_repo_map
+
+    def counted(path):
+        nonlocal walks
+        walks += 1
+        return real_build(path)
+
+    monkeypatch.setattr(coder_mod, "build_repo_map", counted)
+
+    first = await agent._build_knowledge_tree()
+    second = await agent._build_knowledge_tree()
+
+    assert walks == 1, "the second request must be served from the cache"
+    assert first == second
+
+
+async def test_a_changed_file_rebuilds_the_repo_map(agent, tmp_project, monkeypatch):
+    walks = 0
+    real_build = coder_mod.build_repo_map
+
+    def counted(path):
+        nonlocal walks
+        walks += 1
+        return real_build(path)
+
+    monkeypatch.setattr(coder_mod, "build_repo_map", counted)
+    await agent._build_knowledge_tree()
+
+    (tmp_project / "main.py").write_text("class Rewritten:\n    pass\n", encoding="utf-8")
+    tree = await agent._build_knowledge_tree()
+
+    assert walks == 2, "a stale map must not be served"
+    assert "class Rewritten" in tree
+
+
+async def test_the_knowledge_tree_still_builds_without_redis(agent, fake_redis):
+    """The cache is an accelerator; the agent cannot depend on it."""
+    fake_redis.broken = True
+    assert "class Greeter" in await agent._build_knowledge_tree()
+
+
 def test_chunk_formatting_includes_file_and_line_range():
     out = _fmt_chunks([{"file_path": "a.py", "start_line": 1, "end_line": 9, "content": "code"}])
     assert "a.py" in out and "1" in out and "9" in out

@@ -1,11 +1,19 @@
 """
 AST-based repo map: extracts class and function signatures from source files.
 Gives the Coding Agent global dependency awareness without full file content.
+
+Building the map parses every source file in the project, and the agent needs it
+on every request — so `fingerprint_sources` exists to let a caller cache the
+result and recompute only when the files behind it actually change. Both walk
+the same `_source_files` generator: a fingerprint taken over a different set of
+files than the map was built from would validate a stale cache entry.
 """
 from __future__ import annotations
 
 import ast
+import hashlib
 import re
+from collections.abc import Iterator
 from pathlib import Path
 
 _SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", "dist", "build", ".next"}
@@ -80,6 +88,15 @@ def _map_js(path: Path) -> str:
     return "\n".join(lines)
 
 
+def _source_files(root: Path) -> Iterator[Path]:
+    """Every Python or JS/TS file the map is built from, in a stable order."""
+    for f in sorted(root.rglob("*")):
+        if not f.is_file() or any(p in _SKIP_DIRS for p in f.parts):
+            continue
+        if f.suffix.lower() in _PY_EXT | _JS_EXT:
+            yield f
+
+
 def build_repo_map(project_path: str) -> str:
     """Return a compact signature-only map of all Python and JS/TS files."""
     # Resolve so emitted paths align with CoderAgent._path (also resolved),
@@ -91,21 +108,40 @@ def build_repo_map(project_path: str) -> str:
 
     sections: list[str] = []
     count = 0
-    for f in sorted(root.rglob("*")):
+    for f in _source_files(root):
         if count >= _MAX_FILES:
             sections.append("# ... (truncated — too many files)")
             break
-        if not f.is_file() or any(p in _SKIP_DIRS for p in f.parts):
-            continue
-        suffix = f.suffix.lower()
-        if suffix in _PY_EXT:
-            body = _map_python(f)
-        elif suffix in _JS_EXT:
-            body = _map_js(f)
-        else:
-            continue
+        body = _map_python(f) if f.suffix.lower() in _PY_EXT else _map_js(f)
         if body:
             sections.append(f"## {f.relative_to(root)}\n{body}")
             count += 1
 
     return "\n\n".join(sections)
+
+
+def fingerprint_sources(project_path: str) -> str:
+    """
+    A cheap identity for the project state `build_repo_map` would read.
+
+    Stat-ing files is orders of magnitude cheaper than parsing them, so a
+    caller can check this on every request and only rebuild when it changes.
+    Size and mtime rather than content hashes: this decides whether to redo
+    local work, and reading every file to avoid re-reading every file would
+    defeat the purpose.
+
+    Returns "" for a path that is not a directory, matching `build_repo_map`,
+    so an unusable project is never cached against a meaningful key.
+    """
+    root = Path(project_path).resolve()
+    if not root.is_dir():
+        return ""
+
+    digest = hashlib.sha256()
+    for f in _source_files(root):
+        try:
+            stat = f.stat()
+        except OSError:
+            continue
+        digest.update(f"{f.relative_to(root)}:{stat.st_mtime_ns}:{stat.st_size}\n".encode())
+    return digest.hexdigest()

@@ -8,7 +8,16 @@ import re
 
 import pytest
 
-from core.vector_store import _collection_name, search_chunks, store_chunks
+from core.vector_store import (
+    _collection_name,
+    chunk_id,
+    collection_size,
+    delete_ids,
+    reset_collection,
+    search_chunks,
+    store_chunks,
+    stored_manifest,
+)
 
 DIM = 8
 
@@ -17,8 +26,11 @@ def _vec(seed: float) -> list[float]:
     return [seed] * DIM
 
 
-def _chunk(path="main.py", start=1, end=5, content="body"):
-    return {"file_path": path, "start_line": start, "end_line": end, "content": content}
+def _chunk(path="main.py", start=1, end=5, content="body", file_hash=None):
+    chunk = {"file_path": path, "start_line": start, "end_line": end, "content": content}
+    if file_hash is not None:
+        chunk["file_hash"] = file_hash
+    return chunk
 
 
 # ── Collection naming ────────────────────────────────────────────────────────
@@ -145,7 +157,7 @@ def test_chunks_from_the_same_file_at_different_lines_coexist(isolated_chroma):
 
 
 def test_searching_an_unindexed_project_returns_nothing(isolated_chroma):
-    """The grill agent queries before indexing finishes; it must not crash."""
+    """`search_semantic` may query before indexing finishes; it must not crash."""
     assert search_chunks("/never/indexed", _vec(0.5), n=5) == []
 
 
@@ -161,3 +173,99 @@ def test_result_dicts_have_a_stable_shape(isolated_chroma, n):
                  [_vec(i / 10) for i in range(5)])
     for hit in search_chunks("/p", _vec(0.1), n=n):
         assert set(hit) == {"content", "file_path", "start_line", "end_line"}
+
+
+def test_the_file_hash_is_not_leaked_into_search_results(isolated_chroma):
+    """It is the store's bookkeeping for re-indexing, not part of a result."""
+    store_chunks("/p", [_chunk(file_hash="abc123")], [_vec(0.1)])
+    assert "file_hash" not in search_chunks("/p", _vec(0.1), n=1)[0]
+
+
+# ── The manifest ─────────────────────────────────────────────────────────────
+
+
+def test_an_unindexed_project_has_an_empty_manifest(isolated_chroma):
+    assert stored_manifest("/never/indexed") == {}
+
+
+def test_the_manifest_reports_the_stored_hash(isolated_chroma):
+    store_chunks("/p", [_chunk(file_hash="hash-of-main")], [_vec(0.1)])
+    assert stored_manifest("/p")["main.py"].file_hash == "hash-of-main"
+
+
+def test_the_manifest_groups_every_chunk_of_a_file(isolated_chroma):
+    chunks = [_chunk(start=1), _chunk(start=40), _chunk(start=90)]
+    store_chunks("/p", chunks, [_vec(0.1), _vec(0.2), _vec(0.3)])
+
+    assert len(stored_manifest("/p")["main.py"].ids) == 3
+
+
+def test_the_manifest_separates_files(isolated_chroma):
+    store_chunks(
+        "/p",
+        [_chunk(path="a.py", file_hash="ha"), _chunk(path="b.py", file_hash="hb")],
+        [_vec(0.1), _vec(0.2)],
+    )
+    manifest = stored_manifest("/p")
+
+    assert set(manifest) == {"a.py", "b.py"}
+    assert manifest["b.py"].file_hash == "hb"
+
+
+def test_a_chunk_stored_without_a_hash_reports_an_empty_one(isolated_chroma):
+    """An index written before hashes existed must reconcile, not crash."""
+    store_chunks("/p", [_chunk()], [_vec(0.1)])
+    assert stored_manifest("/p")["main.py"].file_hash == ""
+
+
+def test_the_manifest_ids_match_the_chunk_ids(isolated_chroma):
+    chunk = _chunk(path="api/auth.py", start=12)
+    store_chunks("/p", [chunk], [_vec(0.1)])
+    assert stored_manifest("/p")["api/auth.py"].ids == (chunk_id(chunk),)
+
+
+# ── Deleting ─────────────────────────────────────────────────────────────────
+
+
+def test_deleting_ids_removes_them_from_search(isolated_chroma):
+    """The stale-vector fix: upserting alone can never remove anything."""
+    gone = _chunk(path="deleted.py", content="old content")
+    store_chunks("/p", [gone, _chunk(path="kept.py")], [_vec(0.1), _vec(0.2)])
+
+    assert delete_ids("/p", [chunk_id(gone)]) == 1
+
+    paths = {hit["file_path"] for hit in search_chunks("/p", _vec(0.1), n=10)}
+    assert paths == {"kept.py"}
+
+
+def test_deleting_nothing_is_not_an_error(isolated_chroma):
+    assert delete_ids("/p", []) == 0
+
+
+def test_deleting_an_unknown_id_does_not_disturb_the_rest(isolated_chroma):
+    store_chunks("/p", [_chunk()], [_vec(0.1)])
+    delete_ids("/p", ["main.py:999"])
+    assert collection_size("/p") == 1
+
+
+# ── Resetting ────────────────────────────────────────────────────────────────
+
+
+def test_resetting_empties_the_collection(isolated_chroma):
+    store_chunks("/p", [_chunk()], [_vec(0.1)])
+    reset_collection("/p")
+    assert collection_size("/p") == 0
+
+
+def test_resetting_leaves_other_projects_alone(isolated_chroma):
+    store_chunks("/one", [_chunk()], [_vec(0.1)])
+    store_chunks("/two", [_chunk()], [_vec(0.1)])
+
+    reset_collection("/one")
+
+    assert collection_size("/one") == 0
+    assert collection_size("/two") == 1
+
+
+def test_resetting_an_unindexed_project_is_harmless(isolated_chroma):
+    reset_collection("/never/indexed")  # must not raise

@@ -139,17 +139,6 @@ async def cmd_clear(app, _args: str) -> bool:
     return True
 
 
-# ── /skip ────────────────────────────────────────────────────────────────────
-
-
-async def cmd_skip(app, _args: str) -> bool:
-    if not app.awaiting_answer:
-        app.console.print("[hint]Nothing to skip — no question is pending.[/hint]")
-        return True
-    await app.force_ready()
-    return True
-
-
 # ── /exit ────────────────────────────────────────────────────────────────────
 
 
@@ -162,7 +151,6 @@ COMMANDS: tuple[Command, ...] = (
     Command("/model", "Choose the model for the next request", cmd_model),
     Command("/user", "Set your username or OpenAI API key", cmd_user),
     Command("/index", "Re-index the project for semantic search", cmd_index),
-    Command("/skip", "Stop the clarifying questions and implement now", cmd_skip),
     Command("/clear", "Clear the screen and forget the conversation", cmd_clear),
     Command("/exit", "Quit", cmd_exit),
 )

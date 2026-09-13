@@ -221,11 +221,6 @@ async def test_an_unknown_command_is_reported_not_sent_to_the_agent(app):
     assert "Unknown command" in text_of(app.console)
 
 
-async def test_skip_without_a_pending_question_says_so(app):
-    await commands.dispatch(app, "/skip")
-    assert "Nothing to skip" in text_of(app.console)
-
-
 # ── Rendering ────────────────────────────────────────────────────────────────
 
 
@@ -314,22 +309,11 @@ def test_a_tool_call_shows_the_tool_and_its_target(console):
     assert "core/x.py" in out
 
 
-def test_a_question_is_labelled_with_its_turn(console):
+def test_a_ready_event_renders_nothing(console):
+    """`ready` only signals that classification finished; nothing to show."""
     renderer = EventRenderer(console)
-    renderer.handle({"type": "question", "question": "Which file?", "turn": 2})
-    out = text_of(console)
-    assert "Clarifying question 2" in out
-    assert "Which file?" in out
-    assert "/skip" in out, "the user needs to know they can bail out"
-
-
-def test_a_refined_prompt_is_shown_only_after_interrogation(console):
-    renderer = EventRenderer(console)
-    renderer.handle({"type": "ready", "refined_prompt": "echo", "did_interrogate": False})
+    renderer.handle({"type": "ready", "refined_prompt": "echo"})
     assert text_of(console) == ""
-
-    renderer.handle({"type": "ready", "refined_prompt": "a full spec", "did_interrogate": True})
-    assert "a full spec" in text_of(console)
 
 
 def test_the_summary_is_not_printed_twice(console):
@@ -368,8 +352,6 @@ def captured_sessions(monkeypatch):
                 {"project_path": project_path, "model": model, "history": list(history or [])}
             )
             self.finished = False
-            self.awaiting_answer = False
-            self.answers: list[str] = []
 
         # Mirrors the real coder: the reply arrives as `impl_done`, and `done`
         # repeats it as a summary.
@@ -377,17 +359,6 @@ def captured_sessions(monkeypatch):
             self.finished = True
             yield {"type": "impl_done", "content": "stubbed reply"}
             yield {"type": "done", "summary": "stubbed reply"}
-
-        async def answer(self, message):
-            self.answers.append(message)
-            self.finished = True
-            yield {"type": "impl_done", "content": "stubbed reply"}
-            yield {"type": "done", "summary": "stubbed reply"}
-
-        async def force_ready(self):
-            self.finished = True
-            yield {"type": "impl_done", "content": "forced"}
-            yield {"type": "done", "summary": "forced"}
 
     monkeypatch.setattr("cli.app.ChatSession", StubSession)
     return built
@@ -400,32 +371,6 @@ async def test_every_request_starts_a_brand_new_session(app, captured_sessions):
 
     assert len(captured_sessions) == 2
     assert app._session is None, "a finished session must be dropped, not reused"
-
-
-async def test_an_answer_continues_the_open_session(app, captured_sessions):
-    """A reply to a clarifying question is not a new request."""
-    await app._send("vague request")
-    assert len(captured_sessions) == 1
-
-    # Re-open the session as if a clarifying question were pending.
-    class Pending:
-        finished = False
-        awaiting_answer = True
-
-        def __init__(self):
-            self.answered: list[str] = []
-
-        async def answer(self, message):
-            self.answered.append(message)
-            self.finished = True
-            yield {"type": "done", "summary": message}
-
-    session = Pending()
-    app._session = session
-    await app._send("api/auth.py")
-
-    assert session.answered == ["api/auth.py"]
-    assert len(captured_sessions) == 1, "no second session should have been built"
 
 
 async def test_a_follow_up_carries_the_earlier_turns(app, captured_sessions):
@@ -450,12 +395,6 @@ async def test_the_current_request_is_not_duplicated_into_its_own_history(
 ):
     assert_empty = await app._send("first thing")
     assert captured_sessions[0]["history"] == [], assert_empty
-
-
-async def test_a_clarifying_question_is_remembered_as_a_turn(app, captured_sessions):
-    """An interrogation is part of the conversation, not scaffolding."""
-    app._record({"type": "question", "question": "Which file?", "turn": 1})
-    assert app._history == [{"role": "assistant", "content": "Which file?"}]
 
 
 @pytest.mark.parametrize(
@@ -492,44 +431,92 @@ async def test_the_selected_model_is_used_for_the_next_request(app, captured_ses
     assert captured_sessions[-1]["model"] == "gpt-5.4-mini"
 
 
-async def test_awaiting_answer_reflects_the_open_session(app):
-    assert app.awaiting_answer is False
-
-
 # ── Indexing ─────────────────────────────────────────────────────────────────
 
 
-async def test_an_already_embedded_project_is_not_re_embedded(console, monkeypatch, tmp_path):
-    """Re-embedding an unchanged project costs money and buys nothing."""
+async def test_startup_reconciles_instead_of_skipping(console, monkeypatch, tmp_path):
+    """
+    Indexing is incremental now, so an existing collection is no longer a
+    reason to skip: an unchanged project costs no API calls, and reconciling
+    is what stops the index going stale behind the user's back.
+    """
     monkeypatch.setattr(indexing, "collection_size", lambda path: 42)
+    calls: list[bool] = []
 
-    async def explode(path):
-        raise AssertionError("embedding must be skipped")
-        yield  # pragma: no cover
+    async def fake_embed(path, *, force=False):
+        calls.append(force)
+        yield {"step": "A", "status": "done", "files": 3, "unchanged": 3}
+        yield {"step": "done", "embedded": 0, "unchanged": 3}
 
-    monkeypatch.setattr(indexing, "embed_project", explode)
+    monkeypatch.setattr(indexing, "embed_project", fake_embed)
     assert await indexing.embed(console, str(tmp_path)) is True
-    assert "42 chunks already embedded" in text_of(console)
+    assert calls == [False], "reconciliation must run, unforced"
+    assert "3 unchanged" in text_of(console)
 
 
-async def test_forcing_re_embeds_even_when_vectors_exist(console, monkeypatch, tmp_path):
+async def test_forcing_asks_for_a_full_rebuild(console, monkeypatch, tmp_path):
     monkeypatch.setattr(indexing, "collection_size", lambda path: 42)
-    calls: list[str] = []
+    calls: list[tuple[str, bool]] = []
 
-    async def fake_embed(path):
-        calls.append(path)
+    async def fake_embed(path, *, force=False):
+        calls.append((path, force))
         yield {"step": "A", "status": "done", "files": 3}
         yield {"step": "done"}
 
     monkeypatch.setattr(indexing, "embed_project", fake_embed)
     await indexing.embed(console, str(tmp_path), force=True)
-    assert calls == [str(tmp_path)]
+    assert calls == [(str(tmp_path), True)]
+
+
+async def test_stale_chunks_removed_are_reported(console, monkeypatch, tmp_path):
+    monkeypatch.setattr(indexing, "collection_size", lambda path: 7)
+
+    async def fake_embed(path, *, force=False):
+        yield {"step": "D", "status": "done", "stored": 4, "deleted": 9}
+        yield {"step": "done", "deleted": 9}
+
+    monkeypatch.setattr(indexing, "embed_project", fake_embed)
+    await indexing.embed(console, str(tmp_path))
+    assert "9 stale removed" in text_of(console)
+
+
+async def test_skipped_chunks_are_never_reported_as_a_clean_index(
+    console, monkeypatch, tmp_path
+):
+    """
+    An index missing part of its content must not read as a complete one —
+    the same rule `CheckStatus.SKIPPED` enforces for the linter.
+    """
+    monkeypatch.setattr(indexing, "collection_size", lambda path: 12)
+
+    async def fake_embed(path, *, force=False):
+        yield {"step": "C", "status": "done", "total": 3, "skipped": 2}
+        yield {"step": "done", "skipped": 2, "skipped_files": ["big.py", "huge.py"]}
+
+    monkeypatch.setattr(indexing, "embed_project", fake_embed)
+    assert await indexing.embed(console, str(tmp_path)) is True
+
+    out = text_of(console)
+    assert "2 chunk(s) could not be embedded" in out
+    assert "big.py" in out, "the user needs to know which files are not covered"
+
+
+async def test_cache_hits_are_reported(console, monkeypatch, tmp_path):
+    monkeypatch.setattr(indexing, "collection_size", lambda path: 5)
+
+    async def fake_embed(path, *, force=False):
+        yield {"step": "C", "status": "done", "total": 5, "cached": 5}
+        yield {"step": "done", "cached": 5}
+
+    monkeypatch.setattr(indexing, "embed_project", fake_embed)
+    await indexing.embed(console, str(tmp_path))
+    assert "5 from cache" in text_of(console)
 
 
 async def test_an_indexing_error_points_at_the_fix(console, monkeypatch, tmp_path):
     monkeypatch.setattr(indexing, "collection_size", lambda path: 0)
 
-    async def failing(path):
+    async def failing(path, *, force=False):
         yield {"step": "error", "message": "No OpenAI API key configured"}
 
     monkeypatch.setattr(indexing, "embed_project", failing)
@@ -651,15 +638,6 @@ def test_the_toolbar_shows_the_project_and_model(app):
     assert model_label(app.model) in toolbar
 
 
-def test_the_toolbar_switches_while_a_question_is_pending(app):
-    class Pending:
-        awaiting_answer = True
-        finished = False
-
-    app._session = Pending()
-    assert "/skip" in app._toolbar().value
-
-
 async def test_clear_redraws_the_banner(app, fake_keyring):
     await commands.dispatch(app, "/clear")
     assert "Welcome to InterroAI" in text_of(app.console)
@@ -707,31 +685,3 @@ async def test_setup_can_be_skipped(app, scripted, fake_keyring):
 
     assert not cli_settings.has_api_key()
     assert "/user" in text_of(app.console), "the user needs to know how to set it later"
-
-
-# ── /skip plumbing ───────────────────────────────────────────────────────────
-
-
-async def test_force_ready_without_a_session_does_nothing(app):
-    await app.force_ready()  # must not raise
-
-
-async def test_skip_forwards_to_the_session(app):
-    class Pending:
-        awaiting_answer = True
-        finished = False
-
-        def __init__(self):
-            self.forced = False
-
-        async def force_ready(self):
-            self.forced = True
-            self.finished = True
-            yield {"type": "done", "summary": "forced"}
-
-    session = Pending()
-    app._session = session
-    await commands.dispatch(app, "/skip")
-
-    assert session.forced is True
-    assert app._session is None, "a finished session must be dropped"

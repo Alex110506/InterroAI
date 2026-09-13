@@ -24,7 +24,7 @@ from cli.theme import THEME
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="interroai",
-        description="Interrogative AI coding agent for a local project.",
+        description="AI coding agent for a local project.",
     )
     parser.add_argument(
         "path",

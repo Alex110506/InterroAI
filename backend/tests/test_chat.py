@@ -71,22 +71,6 @@ def test_an_unknown_message_type_is_reported(client):
     assert "Unknown message type" in event["message"]
 
 
-def test_answering_without_an_active_session_is_reported(client):
-    with client.websocket_connect("/api/chat/ws") as ws:
-        ws.send_json({"type": "answer", "message": "hi"})
-        event = ws.receive_json()
-    assert event["type"] == "error"
-    assert "No active session" in event["message"]
-
-
-def test_forcing_ready_without_an_active_session_is_reported(client):
-    with client.websocket_connect("/api/chat/ws") as ws:
-        ws.send_json({"type": "force_ready"})
-        event = ws.receive_json()
-    assert event["type"] == "error"
-    assert "No active session" in event["message"]
-
-
 def test_the_default_model_is_a_known_id():
     assert chat._DEFAULT_MODEL in session.AVAILABLE_MODELS
 

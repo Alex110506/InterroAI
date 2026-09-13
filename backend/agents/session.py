@@ -1,22 +1,20 @@
 """
 Chat session — the agent pipeline, independent of any transport.
 
-One user message flows through three steps:
+One user message flows through two steps:
 
-  Step 1 — Intent classification (3-way):
+  Step 1 — Intent classification (2-way):
     gpt-5.4-mini classifies the user's request as one of:
-      • "answer"      — general question; reply directly with Markdown
-      • "interrogate" — ambiguous implementation request; use GrillAgent
-      • "implement"   — clear implementation task; go straight to coder
+      • "answer"    — general question; reply directly with Markdown
+      • "implement" — implementation task; go straight to the coder
 
   Step 2 — Model selection:
     The caller picks the model explicitly; we validate the ID against the
     coder's model map and reject anything unknown.
 
   Step 3 — Route:
-    • answer:      Q&A agent, then finish
-    • interrogate: GrillAgent → refined prompt → coder
-    • implement:   coder directly
+    • answer:    Q&A agent, then finish
+    • implement: coder directly
 
 `ChatSession` owns that flow and emits plain dict events. `api/chat.py` relays
 them as WebSocket frames; `cli/` renders them to the terminal. Neither the
@@ -37,7 +35,6 @@ from collections.abc import AsyncIterator
 
 from agents import supervisor
 from agents.coder import _MODEL_MAP as _CODER_MODEL_MAP
-from agents.grill import GrillAgent, _fmt_git, _fmt_tree
 from core.errors import InterroAIError
 from core.llm import FAST_TIMEOUT, chat_completion, get_client
 
@@ -59,22 +56,18 @@ AVAILABLE_MODELS: tuple[str, ...] = (
 )
 
 _INTENT_SYSTEM = """\
-You are a routing agent for an AI coding assistant. Classify the user's request into exactly one of three actions:
+You are a routing agent for an AI coding assistant. Classify the user's request into exactly one of two actions:
 
 1. "answer" — The user is asking a general question, requesting an explanation, or having a conversation.
    They are NOT asking to build, change, fix, or implement anything in the codebase.
 
-2. "interrogate" — The user wants to implement/build/fix/modify something in the codebase,
-   BUT the request is vague or ambiguous and needs clarification before a developer can act on it.
-
-3. "implement" — The user wants to implement/build/fix/modify something in the codebase,
-   AND the request is already specific and clear enough for a developer to act on without further questions.
+2. "implement" — The user wants to implement/build/fix/modify something in the codebase.
 
 A reply may be short and depend entirely on the conversation so far ("sure", "yes, do that",
 "the second one"). Read it in the context of the earlier turns and classify what the user is
 actually asking for, not the literal words in isolation.
 
-Respond strictly with JSON: {"action": "answer"} or {"action": "interrogate"} or {"action": "implement"}
+Respond strictly with JSON: {"action": "answer"} or {"action": "implement"}
 """
 
 #: How much prior conversation to carry, in characters, newest first. Context
@@ -99,7 +92,7 @@ def trim_history(history: list[dict] | None) -> list[dict]:
     kept.reverse()
     return kept
 
-_VALID_ACTIONS = ("answer", "interrogate", "implement")
+_VALID_ACTIONS = ("answer", "implement")
 
 
 def is_known_model(model: str) -> bool:
@@ -114,13 +107,38 @@ def unknown_model_message(model: str) -> str:
     )
 
 
+def _fmt_tree(node: dict, depth: int = 0, max_depth: int = 4) -> str:
+    if depth > max_depth or not node:
+        return ""
+    indent = "  " * depth
+    if node.get("kind") == "file":
+        return f"{indent}{node['name']}\n"
+    lines = [f"{indent}{node.get('name', '?')}/\n"]
+    for child in node.get("children") or []:
+        lines.append(_fmt_tree(child, depth + 1, max_depth))
+    return "".join(lines)
+
+
+def _fmt_git(git: dict) -> str:
+    if not git or not git.get("is_git_repo"):
+        return "Not a git repository."
+    parts: list[str] = []
+    if git.get("branch"):
+        parts.append(f"Branch: {git['branch']}")
+    if git.get("modified_files"):
+        parts.append("Modified:\n" + "\n".join(f"  {f}" for f in git["modified_files"]))
+    if git.get("recent_commits"):
+        parts.append("Recent commits:\n" + "\n".join(f"  {c}" for c in git["recent_commits"]))
+    return "\n".join(parts) or "Clean working tree."
+
+
 async def classify_intent(
     user_message: str,
     project_index: dict,
     history: list[dict] | None = None,
 ) -> str:
     """
-    3-way intent classifier. Returns: 'answer' | 'interrogate' | 'implement'.
+    2-way intent classifier. Returns: 'answer' | 'implement'.
 
     *history* is the conversation so far. Without it a reply like "sure" has no
     meaning to classify, and the router guesses.
@@ -175,14 +193,10 @@ class ChatSession:
         async for event in session.start("add retries to the uploader"):
             render(event)
 
-        while session.awaiting_answer:
-            async for event in session.answer(read_user_input()):
-                render(event)
-
-    `awaiting_answer` is True exactly when the last stream ended on a
-    `question` event, so the caller knows an answer is expected rather than a
-    new request. `finished` is True once the work is done and the session
-    should be thrown away.
+    `finished` is True once the work is done and the session should be thrown
+    away. It stays False only when `start()` rejected the request outright
+    (an unknown model) — the caller can pick a valid one and try again on the
+    same session.
     """
 
     def __init__(
@@ -197,11 +211,8 @@ class ChatSession:
         self.model = model or _DEFAULT_MODEL
         self.history = trim_history(history)
         self.finished = False
-        self.awaiting_answer = False
-        self._grill: GrillAgent | None = None
-        self._turn = 0
 
-    # ── Public entry points ───────────────────────────────────────────────
+    # ── Public entry point ────────────────────────────────────────────────
 
     async def start(self, user_message: str) -> AsyncIterator[dict]:
         """Classify *user_message* and route it. Yields the resulting events."""
@@ -216,99 +227,20 @@ class ChatSession:
         async for event in self._guard(self._route(user_message)):
             yield event
 
-    async def answer(self, user_message: str) -> AsyncIterator[dict]:
-        """Feed the user's reply to the last clarifying question."""
-        if self._grill is None:
-            yield {"type": "error", "message": "No active session."}
-            return
-
-        self.awaiting_answer = False
-
-        async def _run() -> AsyncIterator[dict]:
-            result = await self._grill.answer(user_message)
-            async for event in self._dispatch_or_ask(result):
-                yield event
-
-        async for event in self._guard(_run()):
-            yield event
-
-    async def force_ready(self) -> AsyncIterator[dict]:
-        """Stop asking questions and implement from what has been gathered."""
-        if self._grill is None:
-            yield {"type": "error", "message": "No active session."}
-            return
-
-        self.awaiting_answer = False
-
-        async def _run() -> AsyncIterator[dict]:
-            result = await self._grill._force_ready()
-            final_prompt = result.get("refined_prompt", "")
-            async for event in self._implement(final_prompt, did_interrogate=self._turn > 0):
-                yield event
-
-        async for event in self._guard(_run()):
-            yield event
-
     # ── Routing ───────────────────────────────────────────────────────────
 
     async def _route(self, user_message: str) -> AsyncIterator[dict]:
         action = await classify_intent(user_message, self.project_index, self.history)
         logger.info("Intent classified: %r", action)
 
-        if action == "answer":
-            yield {
-                "type": "ready",
-                "refined_prompt": user_message,
-                "did_interrogate": False,
-            }
-            logger.info("Dispatching to Q&A agent | model=%r", self.model)
-            async for event in self._stream_agent(user_message, intent="answer"):
-                yield event
-            return
-
-        if action == "interrogate":
-            self._grill = GrillAgent(
-                project_path=self.project_path,
-                project_index=self.project_index,
-                history=self.history,
-            )
-            result = await self._grill.start(user_message)
-            async for event in self._dispatch_or_ask(result):
-                yield event
-            return
-
-        # "implement"
-        async for event in self._implement(user_message, did_interrogate=False):
-            yield event
-
-    async def _dispatch_or_ask(self, grill_result: dict) -> AsyncIterator[dict]:
-        """Either the grill is satisfied (implement) or it has another question."""
-        if grill_result.get("is_prompt_ready"):
-            async for event in self._implement(
-                grill_result.get("refined_prompt", ""),
-                did_interrogate=self._turn > 0,
-            ):
-                yield event
-            return
-
-        self._turn += 1
-        self.awaiting_answer = True
-        yield {
-            "type": "question",
-            "question": grill_result.get("question", ""),
-            "turn": self._turn,
-        }
-
-    async def _implement(self, prompt: str, *, did_interrogate: bool) -> AsyncIterator[dict]:
-        yield {
-            "type": "ready",
-            "refined_prompt": prompt,
-            "did_interrogate": did_interrogate,
-        }
+        yield {"type": "ready", "refined_prompt": user_message}
         logger.info(
-            "Dispatching to coder | project=%r | model=%r", self.project_path, self.model
+            "Dispatching to %s | project=%r | model=%r",
+            "Q&A agent" if action == "answer" else "coder",
+            self.project_path,
+            self.model,
         )
-        async for event in self._stream_agent(prompt, intent="implement"):
+        async for event in self._stream_agent(user_message, intent=action):
             yield event
 
     async def _stream_agent(self, prompt: str, *, intent: str) -> AsyncIterator[dict]:

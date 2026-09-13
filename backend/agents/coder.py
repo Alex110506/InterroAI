@@ -28,7 +28,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-from core.ast_map import build_repo_map
+from core import cache
+from core.ast_map import build_repo_map, fingerprint_sources
 from core.embeddings import embed_texts
 from core.errors import (
     FileNotFoundInProjectError,
@@ -547,8 +548,20 @@ class CoderAgent:
 
     async def _build_knowledge_tree(self) -> str:
         import asyncio
-        # Run the synchronous AST walk in a thread so it doesn't block the event loop
-        repo_map = await asyncio.to_thread(build_repo_map, str(self._path))
+
+        # The agent needs this on every request, and parsing every source file
+        # again to produce the identical map is the most expensive thing it
+        # does before the first token. Stat the files instead (cheap), and
+        # reuse the cached map while they are untouched. The agent's own writes
+        # move an mtime, so the fingerprint invalidates itself.
+        path = str(self._path)
+        fingerprint = await asyncio.to_thread(fingerprint_sources, path)
+        repo_map = await cache.get_repo_map(path, fingerprint)
+
+        if repo_map is None:
+            # Run the synchronous AST walk in a thread so it doesn't block the event loop
+            repo_map = await asyncio.to_thread(build_repo_map, path)
+            await cache.set_repo_map(path, fingerprint, repo_map)
 
         return (
             "<knowledge_tree>\n\n"

@@ -1,6 +1,6 @@
 # Technical Specification and Architecture: Desktop AI Multi-Agent Orchestration Platform
 
-This document represents the complete architectural guide for developing an advanced desktop platform dedicated to the management and execution of complex tasks through AI agent networks. The system is designed to run locally, providing direct and secure access to the user's workspace files, optimizing workflows through dynamic model selection and proactive requirement clarification. THIS PROJECT WILL ONLY USE MODELS FROM OPENAI
+This document represents the complete architectural guide for developing an advanced desktop platform dedicated to the management and execution of complex tasks through AI agent networks. The system is designed to run locally, providing direct and secure access to the user's workspace files, optimizing workflows through dynamic model selection. THIS PROJECT WILL ONLY USE MODELS FROM OPENAI
 
 ---
 
@@ -66,7 +66,9 @@ The indexing process is designed to be non-blocking to maintain a fluid user exp
 
 ---
 
-## 4. "Interrogate Me" Phase (Requirement Clarification)
+## 4. "Interrogate Me" Phase (Requirement Clarification) — Removed
+
+**Status: removed from the implementation.** This phase (a stateful, up-to-5-turn clarifying-question loop, `agents/grill.py`) shipped and was later removed by product decision — implementation requests now go straight to the Coding Agent (Section 6), with intent classification (Section 5, as actually implemented — see `CLAUDE.md`) deciding only between a read-only answer and a full implementation. The section below is kept for historical context only; do not build against it.
 
 Inspired by grill me feature from claude code, this is the first stage of any interaction. Instead of being a passive assistant, the system acts as a proactive partner. When a user provides a prompt, the system does not start execution directly but initiates an interrogation session to ensure all technical details are clear.
 
@@ -82,9 +84,11 @@ The interrogator returns responses in a strictly structured format (valid JSON).
 
 ---
 
-## 5. Automated Routing Layer & Agent Selection
+## 5. Automated Routing Layer & Agent Selection — Superseded
 
-Once the prompt is finalized through the "Interrogate Me" phase, the platform determines the most efficient way to execute the task. This layer manages both **Model Routing** (cost/latency) and **Agent Delegation** (specialization) using **LangChain** and **OpenAI**.
+**Status: the LangChain semantic router and automatic model routing described below were removed from the implementation** (see `CLAUDE.md`: "there is no automatic routing... An unknown ID yields an `error` event"). The caller now names the model explicitly, and a lightweight 2-way `answer | implement` classifier (`agents/session.py::classify_intent`) is the only routing that remains. The section below is kept for historical context only; do not build against it.
+
+Once the prompt is classified, the platform determines the most efficient way to execute the task. This layer manages both **Model Routing** (cost/latency) and **Agent Delegation** (specialization) using **LangChain** and **OpenAI**.
 
 ### Semantic Routing (LangChain Integrated):
 1.  **Vector Conversion:** The refined prompt is converted into a high-dimensional vector using OpenAI's `text-embedding-3-small` model.

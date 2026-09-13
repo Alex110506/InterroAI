@@ -55,13 +55,6 @@ class InterroCLI:
             complete_while_typing=True,
         )
 
-    # ── State the commands read ───────────────────────────────────────────
-
-    @property
-    def awaiting_answer(self) -> bool:
-        """True while the grill agent is waiting on an answer from the user."""
-        return self._session is not None and self._session.awaiting_answer
-
     # ── Terminal chrome ───────────────────────────────────────────────────
 
     def print_banner(self) -> None:
@@ -72,8 +65,6 @@ class InterroCLI:
 
     def _toolbar(self) -> HTML:
         project = Path(self.project_path).name
-        if self.awaiting_answer:
-            return HTML(f"  <b>{project}</b>  ·  answering question  ·  /skip to implement now")
         return HTML(f"  <b>{project}</b>  ·  {model_label(self.model)}  ·  /help")
 
     # ── Input ─────────────────────────────────────────────────────────────
@@ -109,10 +100,10 @@ class InterroCLI:
         The spinner is stopped before each event and restarted after, so
         printed output never lands on top of a live-updating line.
 
-        Anything the agent *said* — a clarifying question, a final summary —
-        is recorded as a turn on the way past, so the next request can refer
-        back to it. Plans, tool calls and validation results are working notes,
-        not conversation, and are not recorded.
+        Anything the agent *said* — its final summary — is recorded as a turn
+        on the way past, so the next request can refer back to it. Plans, tool
+        calls and validation results are working notes, not conversation, and
+        are not recorded.
         """
         status = self.console.status("[hint]Thinking…[/hint]", spinner="dots")
         status.start()
@@ -129,40 +120,26 @@ class InterroCLI:
             self._renderer.finish()
 
     def _record(self, event: dict) -> None:
-        spoken = {"question": "question", "impl_done": "content"}.get(event.get("type"))
-        if spoken is None:
+        if event.get("type") != "impl_done":
             return
-        content = (event.get(spoken) or "").strip()
+        content = (event.get("content") or "").strip()
         if content:
             self._history.append({"role": "assistant", "content": content})
 
     async def _send(self, text: str) -> None:
         self._history.append({"role": "user", "content": text})
 
-        if self._session is not None and self._session.awaiting_answer:
-            stream = self._session.answer(text)
-        else:
-            # A new request gets a new session, seeded with the conversation so
-            # far. The session itself stays single-use; the transcript is ours.
-            self._session = ChatSession(
-                project_path=self.project_path,
-                project_index=self._index_payload(),
-                model=self.model,
-                history=self._history[:-1],
-            )
-            stream = self._session.start(text)
-
-        await self._consume(stream)
+        # A new request gets a new session, seeded with the conversation so
+        # far. The session itself stays single-use; the transcript is ours.
+        self._session = ChatSession(
+            project_path=self.project_path,
+            project_index=self._index_payload(),
+            model=self.model,
+            history=self._history[:-1],
+        )
+        await self._consume(self._session.start(text))
 
         if self._session is not None and self._session.finished:
-            self._session = None
-
-    async def force_ready(self) -> None:
-        """Backs `/skip`."""
-        if self._session is None:
-            return
-        await self._consume(self._session.force_ready())
-        if self._session.finished:
             self._session = None
 
     def clear_conversation(self) -> None:

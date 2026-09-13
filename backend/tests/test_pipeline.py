@@ -17,6 +17,7 @@ import agents.coder as coder_mod
 import agents.session as session
 import core.project_index as project_index
 from agents.coder import CoderAgent
+from core.embeddings import EmbeddedBatch
 from main import app
 
 
@@ -70,20 +71,19 @@ def test_an_answer_goes_straight_to_the_qa_agent(client, monkeypatch, captured_s
         done = ws.receive_json()
 
     assert ready["type"] == "ready"
-    assert ready["did_interrogate"] is False
     assert done["type"] == "done"
     assert captured_supervisor[0]["intent"] == "answer"
     assert captured_supervisor[0]["prompt"] == "what does this repo do?"
 
 
-def test_a_clear_request_skips_interrogation(client, monkeypatch, captured_supervisor):
+def test_a_clear_request_goes_straight_to_the_coder(client, monkeypatch, captured_supervisor):
     _fix_intent(monkeypatch, "implement")
     with client.websocket_connect("/api/chat/ws") as ws:
         ws.send_json(_start(message="rename X to Y in a.py"))
         ready = ws.receive_json()
         ws.receive_json()
 
-    assert ready["did_interrogate"] is False
+    assert ready["type"] == "ready"
     assert captured_supervisor[0]["intent"] == "implement"
     assert captured_supervisor[0]["prompt"] == "rename X to Y in a.py"
 
@@ -121,101 +121,6 @@ def test_the_project_path_reaches_the_supervisor(client, monkeypatch, captured_s
     assert captured_supervisor[0]["project_path"] == "/some/where"
 
 
-# ── Chat pipeline: the interrogation loop ────────────────────────────────────
-
-
-class StubGrill:
-    """Asks `questions` in order, then reports ready."""
-
-    def __init__(self, questions, refined="refined spec"):
-        self._questions = list(questions)
-        self._refined = refined
-
-    async def start(self, prompt):
-        return self._next()
-
-    async def answer(self, message):
-        return self._next()
-
-    async def _force_ready(self):
-        return {"is_prompt_ready": True, "refined_prompt": "forced spec"}
-
-    def _next(self):
-        if self._questions:
-            return {"is_prompt_ready": False, "question": self._questions.pop(0)}
-        return {"is_prompt_ready": True, "refined_prompt": self._refined}
-
-
-def _stub_grill(monkeypatch, questions, refined="refined spec"):
-    monkeypatch.setattr(session, "GrillAgent", lambda **kwargs: StubGrill(questions, refined))
-
-
-def test_a_vague_request_is_interrogated_then_implemented(
-    client, monkeypatch, captured_supervisor
-):
-    _fix_intent(monkeypatch, "interrogate")
-    _stub_grill(monkeypatch, ["which file?"], refined="a complete spec")
-
-    with client.websocket_connect("/api/chat/ws") as ws:
-        ws.send_json(_start(message="make it better"))
-        question = ws.receive_json()
-        assert question["type"] == "question"
-        assert question["question"] == "which file?"
-        assert question["turn"] == 1
-
-        ws.send_json({"type": "answer", "message": "api/auth.py"})
-        ready = ws.receive_json()
-        ws.receive_json()
-
-    assert ready["refined_prompt"] == "a complete spec"
-    assert ready["did_interrogate"] is True
-    assert captured_supervisor[0]["prompt"] == "a complete spec"
-
-
-def test_turn_numbers_increase_across_questions(client, monkeypatch, captured_supervisor):
-    _fix_intent(monkeypatch, "interrogate")
-    _stub_grill(monkeypatch, ["q1", "q2", "q3"])
-
-    with client.websocket_connect("/api/chat/ws") as ws:
-        ws.send_json(_start())
-        assert ws.receive_json()["turn"] == 1
-        for expected in (2, 3):
-            ws.send_json({"type": "answer", "message": "detail"})
-            assert ws.receive_json()["turn"] == expected
-
-
-def test_an_immediately_clear_request_is_not_questioned(
-    client, monkeypatch, captured_supervisor
-):
-    """The grill agent may decide no clarification is needed at all."""
-    _fix_intent(monkeypatch, "interrogate")
-    _stub_grill(monkeypatch, [], refined="already specific")
-
-    with client.websocket_connect("/api/chat/ws") as ws:
-        ws.send_json(_start())
-        ready = ws.receive_json()
-        ws.receive_json()
-
-    assert ready["type"] == "ready"
-    assert ready["did_interrogate"] is False
-
-
-def test_force_ready_short_circuits_the_questions(client, monkeypatch, captured_supervisor):
-    """Backs the UI's "stop asking and just do it" button."""
-    _fix_intent(monkeypatch, "interrogate")
-    _stub_grill(monkeypatch, ["q1", "q2", "q3"])
-
-    with client.websocket_connect("/api/chat/ws") as ws:
-        ws.send_json(_start())
-        ws.receive_json()
-        ws.send_json({"type": "force_ready"})
-        ready = ws.receive_json()
-        ws.receive_json()
-
-    assert ready["refined_prompt"] == "forced spec"
-    assert captured_supervisor[0]["prompt"] == "forced spec"
-
-
 # ── Indexing pipeline ────────────────────────────────────────────────────────
 
 
@@ -223,16 +128,18 @@ def test_force_ready_short_circuits_the_questions(client, monkeypatch, captured_
 def stub_embedding(monkeypatch):
     stored = {}
 
-    async def fake_embed(texts, on_progress=None):
-        if on_progress:
-            await on_progress(len(texts), len(texts))
-        return [[0.1] * 4 for _ in texts]
+    async def fake_batches(texts, **kwargs):
+        yield EmbeddedBatch(
+            indices=list(range(len(texts))),
+            vectors=[[0.1] * 4 for _ in texts],
+        )
 
     def fake_store(path, chunks, embeddings):
         stored["path"] = path
-        stored["chunks"] = chunks
+        # Called once per batch now, so accumulate rather than overwrite.
+        stored.setdefault("chunks", []).extend(chunks)
 
-    monkeypatch.setattr(project_index, "embed_texts", fake_embed)
+    monkeypatch.setattr(project_index, "embed_batches", fake_batches)
     monkeypatch.setattr(project_index, "store_chunks", fake_store)
     return stored
 
@@ -305,10 +212,11 @@ def test_an_empty_project_finishes_without_embedding(client, tmp_path, stub_embe
 
 
 def test_an_indexing_failure_is_reported_and_logged(client, tmp_project, monkeypatch, caplog):
-    async def boom(texts, on_progress=None):
+    async def boom(texts, **kwargs):
         raise RuntimeError("provider exploded")
+        yield  # pragma: no cover — makes this an async generator
 
-    monkeypatch.setattr(project_index, "embed_texts", boom)
+    monkeypatch.setattr(project_index, "embed_batches", boom)
     with caplog.at_level("ERROR", logger="core.project_index"):
         with client.websocket_connect("/api/projects/ws/embed") as ws:
             ws.send_json({"path": str(tmp_project)})

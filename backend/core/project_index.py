@@ -12,22 +12,46 @@ HTTP/WebSocket adapters in `api/projects.py`:
 Phase 2 is a generator rather than a callback-driven routine so that a caller
 can render progress however it likes — as WebSocket frames, or as a live
 terminal progress display — without this module knowing which.
+
+Phase 2 is also **incremental**, which is what makes it cheap enough to run on
+every startup. Each stored chunk carries the hash of the file it came from, so
+a run begins by comparing the hashes on disk with the hashes in the store and
+splits the project three ways:
+
+  * unchanged files — nothing to do, and nothing to pay for;
+  * changed or new files — re-chunked and re-embedded;
+  * files that are gone, and chunks a shrunken file no longer produces —
+    deleted, because an orphaned chunk still answers searches and attributes
+    content to a file that does not contain it any more.
+
+A project nobody has touched therefore costs one local hashing pass and zero
+API calls, and the index stops drifting out of date between explicit re-indexes.
+`force=True` skips reconciliation and rebuilds from scratch — see
+`vector_store.reset_collection`.
 """
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import subprocess
 from collections.abc import AsyncIterator
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
 from pydantic import BaseModel
 
 from core.chunker import chunk_file, is_indexable
-from core.embeddings import embed_texts
+from core.embeddings import embed_batches
 from core.errors import InterroAIError
-from core.vector_store import store_chunks
+from core.vector_store import (
+    chunk_id,
+    delete_ids,
+    reset_collection,
+    store_chunks,
+    stored_manifest,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -309,104 +333,227 @@ def build_index(path: str | Path) -> ProjectIndex:
 
 # ── Phase 2 ───────────────────────────────────────────────────────────────────
 
-#: Queue sentinel marking the end of the embedding task. A plain object()
-#: cannot collide with a progress event the way a string key could.
-_EMBED_FINISHED = object()
+_HASH_READ_SIZE = 1 << 20
 
 
-async def _embed_with_progress(
-    texts: list[str],
-    queue: asyncio.Queue,
-) -> list[list[float]]:
-    """
-    Run `embed_texts`, pushing each progress tick onto *queue*.
-
-    `embed_texts` reports progress through a callback, but the caller here is a
-    generator and a callback cannot yield on its behalf. The queue bridges the
-    two: the callback pushes, the generator drains.
-    """
-
-    async def _on_progress(embedded: int, total: int) -> None:
-        await queue.put(
-            {"step": "C", "status": "progress", "embedded": embedded, "total": total}
-        )
-
+def _file_hash(path: Path) -> str:
+    """sha256 of a file's bytes, or "" if it cannot be read."""
+    digest = hashlib.sha256()
     try:
-        result = await embed_texts(texts, on_progress=_on_progress)
-    except BaseException as exc:  # noqa: BLE001 — re-raised in the consumer
-        await queue.put((_EMBED_FINISHED, None, exc))
-        raise
-    await queue.put((_EMBED_FINISHED, result, None))
-    return result
+        with path.open("rb") as handle:
+            while block := handle.read(_HASH_READ_SIZE):
+                digest.update(block)
+    except OSError:
+        return ""
+    return digest.hexdigest()
 
 
-async def _embed_steps(root: Path) -> AsyncIterator[dict]:
-    """The A-D pipeline proper. Raises; `embed_project` turns that into an event."""
-    # ── A: .gitignore-aware file traversal ───────────────────────────────────
-    yield {"step": "A", "status": "start"}
-    files = await asyncio.to_thread(_walk_indexable_files, root)
-    yield {"step": "A", "status": "done", "files": len(files)}
+@dataclass(frozen=True)
+class _Plan:
+    """What a run has to do, decided before a single API call is made."""
 
-    # ── B: semantic chunking ─────────────────────────────────────────────────
-    yield {"step": "B", "status": "start"}
-    all_chunks: list[dict] = []
-    for file_path in files:
-        all_chunks.extend(chunk_file(file_path, root))
-    yield {"step": "B", "status": "done", "chunks": len(all_chunks)}
+    #: Files whose content differs from what the store holds, with their hashes.
+    changed: dict[Path, str] = field(default_factory=dict)
+    #: Files the store knows and disk no longer has.
+    removed: tuple[str, ...] = ()
+    #: Chunk ids belonging to those vanished files.
+    orphan_ids: tuple[str, ...] = ()
+    #: Ids currently stored for each *changed* file, so the ids its new chunks
+    #: do not reproduce can be pruned without reading the store a second time.
+    stored_ids: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    unchanged: int = 0
 
-    if not all_chunks:
-        yield {"step": "done"}
-        return
 
-    # ── C: OpenAI text-embedding-3-small ─────────────────────────────────────
-    yield {"step": "C", "status": "start", "total": len(all_chunks)}
+def _plan_run(root: Path, files: list[Path]) -> _Plan:
+    """
+    Diff the files on disk against the manifest in the store.
 
-    queue: asyncio.Queue = asyncio.Queue()
-    task = asyncio.create_task(
-        _embed_with_progress([c["content"] for c in all_chunks], queue)
+    Hashing is local and cheap next to an embedding call, so this is the step
+    that decides what the run costs. It is also the only read of the store per
+    run: everything the pruning step needs is carried out of here, which keeps
+    the decision consistent even if the files move underneath us afterwards.
+    """
+    stored = stored_manifest(str(root))
+
+    changed: dict[Path, str] = {}
+    stored_ids: dict[str, tuple[str, ...]] = {}
+    unchanged = 0
+    seen: set[str] = set()
+
+    for path in files:
+        relative = str(path.relative_to(root))
+        seen.add(relative)
+        digest = _file_hash(path)
+        known = stored.get(relative)
+        if known is not None and digest and known.file_hash == digest:
+            unchanged += 1
+            continue
+        changed[path] = digest
+        if known is not None:
+            stored_ids[relative] = known.ids
+
+    removed = tuple(sorted(set(stored) - seen))
+    orphan_ids = tuple(
+        chunk_key for path in removed for chunk_key in stored[path].ids
     )
 
-    all_embeddings: list[list[float]] = []
-    try:
-        while True:
-            item = await queue.get()
-            if isinstance(item, tuple) and item and item[0] is _EMBED_FINISHED:
-                _, result, exc = item
-                if exc is not None:
-                    raise exc
-                all_embeddings = result
-                break
-            yield item
-    finally:
-        # A consumer that stops iterating early (client disconnect, Ctrl-C)
-        # must not leave the embedding task running against a queue nobody
-        # drains any more.
-        if not task.done():
-            task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
+    return _Plan(
+        changed=changed,
+        removed=removed,
+        orphan_ids=orphan_ids,
+        stored_ids=stored_ids,
+        unchanged=unchanged,
+    )
 
-    yield {"step": "C", "status": "done", "total": len(all_chunks)}
 
-    # ── D: ChromaDB persistent storage ───────────────────────────────────────
+def _superseded_ids(plan: _Plan, chunks: list[dict]) -> list[str]:
+    """
+    Ids the re-chunked files used to have and no longer produce.
+
+    A file that shrank is the case that matters: its surviving chunks are
+    overwritten by the upsert, but the ones past its new end would otherwise
+    stay behind and keep answering searches.
+    """
+    fresh_ids = {chunk_id(c) for c in chunks}
+    return [
+        chunk_key
+        for path in {c["file_path"] for c in chunks}
+        for chunk_key in plan.stored_ids.get(path, ())
+        if chunk_key not in fresh_ids
+    ]
+
+
+async def _embed_steps(root: Path, *, force: bool) -> AsyncIterator[dict]:
+    """The A-D pipeline proper. Raises; `embed_project` turns that into an event."""
+    # ── A: traversal, then reconcile against what is already stored ──────────
+    yield {"step": "A", "status": "start"}
+    files = await asyncio.to_thread(_walk_indexable_files, root)
+
+    if force:
+        # An explicit rebuild: the existing collection is the thing being
+        # discarded, so there is nothing to reconcile against.
+        await asyncio.to_thread(reset_collection, str(root))
+        plan = _Plan(changed={path: "" for path in files})
+    else:
+        plan = await asyncio.to_thread(_plan_run, root, files)
+
+    yield {
+        "step": "A",
+        "status": "done",
+        "files": len(files),
+        "changed": len(plan.changed),
+        "removed": len(plan.removed),
+        "unchanged": plan.unchanged,
+    }
+
+    # ── B: semantic chunking, of the changed files only ──────────────────────
+    yield {"step": "B", "status": "start"}
+    all_chunks: list[dict] = []
+    for file_path, digest in plan.changed.items():
+        for chunk in chunk_file(file_path, root):
+            # Carried into the store's metadata, so the next run can tell
+            # whether this file still matches what was embedded.
+            chunk["file_hash"] = digest or _file_hash(file_path)
+            all_chunks.append(chunk)
+    yield {"step": "B", "status": "done", "chunks": len(all_chunks)}
+
+    stale_ids = list(plan.orphan_ids)
+    if all_chunks and not force:
+        stale_ids += _superseded_ids(plan, all_chunks)
+
+    if not all_chunks:
+        # Nothing to embed. Orphans still have to go, or deleting a file would
+        # never actually remove it from search results.
+        deleted = await asyncio.to_thread(delete_ids, str(root), stale_ids)
+        yield {"step": "D", "status": "done", "stored": 0, "deleted": deleted}
+        yield {
+            "step": "done",
+            "embedded": 0,
+            "cached": 0,
+            "skipped": 0,
+            "deleted": deleted,
+            "unchanged": plan.unchanged,
+        }
+        return
+
+    # ── C: OpenAI text-embedding-3-small, persisted batch by batch ───────────
+    yield {"step": "C", "status": "start", "total": len(all_chunks)}
+
+    stored_count = 0
+    cached_count = 0
+    skipped: list[str] = []
+
+    async for batch in embed_batches([c["content"] for c in all_chunks]):
+        if batch.indices:
+            # Stored as each batch lands rather than once at the end, so a
+            # failure later in the run cannot discard what is already paid for.
+            batch_chunks = [all_chunks[i] for i in batch.indices]
+            await asyncio.to_thread(store_chunks, str(root), batch_chunks, batch.vectors)
+            stored_count += len(batch_chunks)
+            cached_count += batch.from_cache
+
+        for position in batch.failures:
+            # Its file's other chunks still store the current hash, so the
+            # next run sees the file as unchanged and does not re-attempt this
+            # one. Deliberate: an item error is deterministic (over the token
+            # limit, refused content), so retrying every run would re-pay for
+            # the chunks that *do* work to fail identically on this one. The
+            # summary reports it, and `--reindex` retries everything.
+            skipped.append(all_chunks[position]["file_path"])
+
+        yield {
+            "step": "C",
+            "status": "progress",
+            "embedded": stored_count,
+            "total": len(all_chunks),
+            "cached": cached_count,
+            "skipped": len(skipped),
+        }
+
+    yield {
+        "step": "C",
+        "status": "done",
+        "total": len(all_chunks),
+        "cached": cached_count,
+        "skipped": len(skipped),
+    }
+
+    # ── D: prune what the new chunks replaced or outlived ────────────────────
+    #
+    # After storing, not before: a run that dies mid-way then leaves the old
+    # vectors in place rather than a hole, and the next run re-detects the
+    # same work from the manifest either way.
     yield {"step": "D", "status": "start"}
-    await asyncio.to_thread(store_chunks, str(root), all_chunks, all_embeddings)
-    yield {"step": "D", "status": "done", "stored": len(all_chunks)}
+    deleted = await asyncio.to_thread(delete_ids, str(root), stale_ids)
+    yield {"step": "D", "status": "done", "stored": stored_count, "deleted": deleted}
 
-    yield {"step": "done"}
+    yield {
+        "step": "done",
+        "embedded": stored_count,
+        "cached": cached_count,
+        "skipped": len(skipped),
+        "skipped_files": sorted(set(skipped)),
+        "deleted": deleted,
+        "unchanged": plan.unchanged,
+    }
 
 
-async def embed_project(path: str | Path) -> AsyncIterator[dict]:
+async def embed_project(path: str | Path, *, force: bool = False) -> AsyncIterator[dict]:
     """
     Phase 2 RAG indexing pipeline (Sections 3A-D).
 
+    Reconciles against what is already stored and embeds only what changed.
+    Pass *force* to discard the project's collection and rebuild it instead.
+
     Yields progress events:
       {"step": "A"|"B"|"C"|"D", "status": "start"|"done"|"progress", ...}
-      {"step": "done"}
+      {"step": "done", "embedded", "cached", "skipped", "deleted", "unchanged"}
       {"step": "error", "message": "..."}
 
     Failures arrive as an error event rather than an exception. Every caller
-    has to render them anyway, and there is no partial index to resume from,
-    so an exception handler at each call site would have nothing to add.
+    has to render them anyway, so an exception handler at each call site would
+    have nothing to add. Chunks embedded before the failure are already
+    stored — the next run reconciles and picks up the rest.
     """
     try:
         root = Path(path).expanduser().resolve()
@@ -419,7 +566,7 @@ async def embed_project(path: str | Path) -> AsyncIterator[dict]:
         return
 
     try:
-        async for event in _embed_steps(root):
+        async for event in _embed_steps(root, force=force):
             yield event
     except InterroAIError as exc:
         # Expected (e.g. no API key) — the message is already user-facing.

@@ -39,16 +39,23 @@ async def embed_project_ws(websocket: WebSocket) -> None:
     """
     Phase 2 RAG indexing pipeline (Sections 3A-D).
 
-    Client sends:  { "path": "/abs/path/to/project" }
+    Client sends:  { "path": "/abs/path/to/project", "force": false }
+
+    Indexing is incremental: only files whose contents changed are re-embedded,
+    and chunks belonging to deleted files are pruned. `force` discards the
+    project's collection and rebuilds it from scratch instead.
+
     Server emits a stream of JSON progress events:
       { "step": "A"|"B"|"C"|"D", "status": "start"|"done"|"progress", ...fields }
-      { "step": "done" }
+      { "step": "done", "embedded", "cached", "skipped", "deleted", "unchanged" }
       { "step": "error", "message": "..." }
     """
     await websocket.accept()
     try:
         payload = await websocket.receive_json()
-        async for event in embed_project(payload["path"]):
+        async for event in embed_project(
+            payload["path"], force=bool(payload.get("force", False))
+        ):
             await websocket.send_json(event)
 
     except WebSocketDisconnect:

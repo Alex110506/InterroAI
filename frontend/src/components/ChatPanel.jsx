@@ -4,13 +4,22 @@ import remarkGfm from 'remark-gfm'
 import {
   Plus, ChevronDown, ArrowUp, Brain, FolderOpen,
   PanelRight, PanelRightClose,
-  GitBranch, FileCode2, Layers, AlertTriangle, CheckCircle2, Sparkles, X,
+  GitBranch, FileCode2, Layers, AlertTriangle, CheckCircle2,
 } from 'lucide-react'
 import { api } from '../lib/api'
 import s from './ChatPanel.module.css'
 
 /* ─── Per-project message history (runtime, no persistence yet) ─────── */
 const projectMessages = {}
+
+/* Turn the panel's own message list into the OpenAI message shape the
+ * backend expects for `history` — user turns plus the agent's final replies.
+ * Working notes (errors) are not part of the conversation. */
+function toHistory(messages) {
+  return messages
+    .filter((m) => m.role === 'user' || m.subtype === 'message')
+    .map((m) => ({ role: m.role === 'user' ? 'user' : 'assistant', content: m.content }))
+}
 
 /* ─── Embed step indicators ─────────────────────────────────────────── */
 const STEP_LABELS = { A: 'Scanning files', B: 'Chunking code', C: 'Generating embeddings', D: 'Storing vectors' }
@@ -101,8 +110,7 @@ function ProjectEmptyState({ project }) {
       </div>
       <p className={s.emptyTitle}>Ask the agent anything</p>
       <p className={s.emptyDesc}>
-        The agent will ask you a few targeted questions to clarify your request
-        before starting work on <strong>{folderName}</strong>.
+        Ask a question, or describe what to build, fix, or change in <strong>{folderName}</strong>.
       </p>
 
       {index && (
@@ -165,7 +173,6 @@ export default function ChatPanel({ activeId, projects, thoughtOpen, onToggleTho
   const [input, setInput] = useState('')
   const [selectedModel, setSelectedModel] = useState(DEFAULT_MODEL)
   const [showModelDropdown, setShowModelDropdown] = useState(false)
-  const [phase, setPhase] = useState('idle')   // 'idle' | 'interrogating' | 'ready'
   const [isLoading, setIsLoading] = useState(false)
   const [, forceUpdate] = useState(0)
   const textareaRef = useRef(null)
@@ -190,7 +197,6 @@ export default function ChatPanel({ activeId, projects, thoughtOpen, onToggleTho
       wsRef.current.close()
       wsRef.current = null
     }
-    setPhase('idle')
     setIsLoading(false)
     setInput('')
     bottomRef.current?.scrollIntoView({ behavior: 'instant' })
@@ -228,21 +234,11 @@ export default function ChatPanel({ activeId, projects, thoughtOpen, onToggleTho
     if (event.type === 'message') {
       setIsLoading(false)
       addMessage({ role: 'agent', subtype: 'message', content: event.content })
-      setPhase('idle')
       wsRef.current?.close()
       wsRef.current = null
 
-    } else if (event.type === 'question') {
-      setIsLoading(false)
-      setPhase('interrogating')
-      addMessage({ role: 'agent', subtype: 'question', content: event.question, turn: event.turn })
-
-    } else if (event.type === 'ready') {
-      // Coder is starting — keep WebSocket open, keep loading indicator
-      if (event.did_interrogate) {
-        addMessage({ role: 'agent', subtype: 'ready', content: event.refined_prompt })
-      }
-      setPhase('ready')
+    // 'ready' just signals that routing finished and the agent is starting —
+    // nothing new to show, the loading indicator already covers it.
 
     // ── Coder events → right panel ──────────────────────────────────────
     } else if (event.type === 'plan_chunk' || event.type === 'plan') {
@@ -267,14 +263,12 @@ export default function ChatPanel({ activeId, projects, thoughtOpen, onToggleTho
       if (event.summary) {
         addMessage({ role: 'agent', subtype: 'message', content: event.summary })
       }
-      setPhase('idle')
       wsRef.current?.close()
       wsRef.current = null
 
     } else if (event.type === 'error') {
       setIsLoading(false)
       addMessage({ role: 'agent', subtype: 'error', content: event.message })
-      setPhase('idle')
       wsRef.current?.close()
       wsRef.current = null
     }
@@ -285,50 +279,41 @@ export default function ChatPanel({ activeId, projects, thoughtOpen, onToggleTho
     const text = input.trim()
     if (!text || !activeId || isLoading || project?.indexStatus !== 'done') return
 
+    // Snapshot the conversation so far — in OpenAI message shape — before this
+    // turn's own user message is appended below. The backend stores no
+    // transcript itself, so a follow-up like "what was my last question"
+    // only resolves if every request re-sends the history the server needs.
+    const history = toHistory(projectMessages[activeId] ?? [])
+
     addMessage({ role: 'user', content: text })
     setInput('')
     setIsLoading(true)
     clearThought?.()
 
-    if (phase === 'idle' || phase === 'ready') {
-      // Open socket and let the backend decide: direct answer or interrogation
-      // Phase stays 'idle' until the backend sends a 'question' event
-      const ws = api.openChatSocket()
-      wsRef.current = ws
+    const ws = api.openChatSocket()
+    wsRef.current = ws
 
-      ws.onopen = () => {
-        ws.send(JSON.stringify({
-          type: 'start',
-          project_path: project.folderPath,
-          project_index: project.index ?? {},
-          message: text,
-          model: selectedModel,
-        }))
-      }
-
-      ws.onmessage = (e) => handleWsMessage(JSON.parse(e.data))
-
-      ws.onerror = () => {
-        setIsLoading(false)
-        addMessage({ role: 'agent', subtype: 'error', content: 'Connection to backend failed. Is the server running?' })
-        setPhase('idle')
-      }
-
-      ws.onclose = () => {
-        setIsLoading((prev) => (prev ? false : prev))
-      }
-
-    } else if (phase === 'interrogating') {
-      // Send answer to the active session
-      wsRef.current?.send(JSON.stringify({ type: 'answer', message: text }))
+    ws.onopen = () => {
+      ws.send(JSON.stringify({
+        type: 'start',
+        project_path: project.folderPath,
+        project_index: project.index ?? {},
+        message: text,
+        model: selectedModel,
+        history,
+      }))
     }
-  }
 
-  const cancelInterrogation = () => {
-    if (!wsRef.current) return
-    setIsLoading(true)
-    wsRef.current.send(JSON.stringify({ type: 'force_ready' }))
-    // The socket will receive the normal 'ready' event and resolve as usual
+    ws.onmessage = (e) => handleWsMessage(JSON.parse(e.data))
+
+    ws.onerror = () => {
+      setIsLoading(false)
+      addMessage({ role: 'agent', subtype: 'error', content: 'Connection to backend failed. Is the server running?' })
+    }
+
+    ws.onclose = () => {
+      setIsLoading((prev) => (prev ? false : prev))
+    }
   }
 
   const handleKeyDown = (e) => {
@@ -344,7 +329,6 @@ export default function ChatPanel({ activeId, projects, thoughtOpen, onToggleTho
   const placeholder =
     !project ? 'Select a project to begin…' :
     project.indexStatus !== 'done' ? 'Waiting for indexing to finish…' :
-    phase === 'interrogating' ? 'Answer the question…' :
     `Ask about ${project.folderName}…`
 
   const currentModelLabel = MODELS.find(m => m.id === selectedModel)?.label ?? selectedModel
@@ -394,7 +378,7 @@ export default function ChatPanel({ activeId, projects, thoughtOpen, onToggleTho
   const shortPath = folderParts.slice(-3).join('/')
 
   return (
-    <div className={`${s.panel} ${phase === 'interrogating' ? s.panelInterrogating : ''}`}>
+    <div className={s.panel}>
       {/* Header */}
       <header className={s.header}>
         <div className={s.headerInner}>
@@ -411,26 +395,8 @@ export default function ChatPanel({ activeId, projects, thoughtOpen, onToggleTho
         </button>
       </header>
 
-      {/* Interrogation mode bar */}
-      {phase === 'interrogating' && (
-        <div className={s.interrogationBar}>
-          <span className={s.interrogationDot} />
-          Interrogation mode
-          <span className={s.interrogationHint}>Answer the questions to refine your request</span>
-          <button
-            className={s.cancelBtn}
-            onClick={cancelInterrogation}
-            disabled={isLoading}
-            title="Generate refined prompt from answers so far"
-          >
-            <X size={12} strokeWidth={2.5} />
-            Cancel
-          </button>
-        </div>
-      )}
-
       {/* Messages */}
-      <div className={`${s.messages} ${phase === 'interrogating' ? s.messagesInterrogating : ''}`}>
+      <div className={s.messages}>
         {messages.length === 0 ? (
           <ProjectEmptyState project={project} />
         ) : (
@@ -439,26 +405,6 @@ export default function ChatPanel({ activeId, projects, thoughtOpen, onToggleTho
               {msg.role === 'user' ? (
                 <div className={s.userWrap}>
                   <div className={s.userBubble}>{msg.content}</div>
-                </div>
-              ) : msg.subtype === 'question' ? (
-                <div className={s.agentWrap}>
-                  <span className={s.questionLabel}>
-                    <Sparkles size={10} strokeWidth={2} />
-                    Clarifying question {msg.turn}
-                  </span>
-                  <div className={s.agentMd}>
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
-                  </div>
-                </div>
-              ) : msg.subtype === 'ready' ? (
-                <div className={s.agentWrap}>
-                  <div className={s.refinedCard}>
-                    <div className={s.refinedHeader}>
-                      <CheckCircle2 size={13} strokeWidth={2} />
-                      Prompt refined — ready to execute
-                    </div>
-                    <p className={s.refinedContent}>{msg.content}</p>
-                  </div>
                 </div>
               ) : msg.subtype === 'error' ? (
                 <div className={s.agentWrap}>
@@ -483,7 +429,7 @@ export default function ChatPanel({ activeId, projects, thoughtOpen, onToggleTho
 
       {/* Input */}
       <div className={s.inputArea}>
-        <div className={`${s.inputBox} ${phase === 'interrogating' ? s.inputBoxActive : ''}`}>
+        <div className={s.inputBox}>
           <textarea
             ref={textareaRef}
             className={s.textarea}

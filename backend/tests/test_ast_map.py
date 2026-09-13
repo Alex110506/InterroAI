@@ -5,7 +5,7 @@ signatures it emits have to be faithful and the file cap has to hold.
 from __future__ import annotations
 
 import core.ast_map as ast_map
-from core.ast_map import build_repo_map
+from core.ast_map import build_repo_map, fingerprint_sources
 
 # ── Python extraction ────────────────────────────────────────────────────────
 
@@ -137,3 +137,50 @@ def test_file_budget_is_enforced_and_announced(tmp_path, monkeypatch):
     assert "truncated" in out
     assert "def f0()" in out
     assert "def f9()" not in out
+
+
+# ── Fingerprint (what makes the map cacheable) ───────────────────────────────
+
+
+def test_the_fingerprint_is_stable_for_an_untouched_project(tmp_project):
+    assert fingerprint_sources(str(tmp_project)) == fingerprint_sources(str(tmp_project))
+
+
+def test_editing_a_source_file_changes_the_fingerprint(tmp_project):
+    before = fingerprint_sources(str(tmp_project))
+    (tmp_project / "main.py").write_text("def different(): pass\n", encoding="utf-8")
+    assert fingerprint_sources(str(tmp_project)) != before
+
+
+def test_adding_a_source_file_changes_the_fingerprint(tmp_project):
+    before = fingerprint_sources(str(tmp_project))
+    (tmp_project / "extra.py").write_text("def added(): pass\n", encoding="utf-8")
+    assert fingerprint_sources(str(tmp_project)) != before
+
+
+def test_deleting_a_source_file_changes_the_fingerprint(tmp_project):
+    before = fingerprint_sources(str(tmp_project))
+    (tmp_project / "utils" / "helpers.py").unlink()
+    assert fingerprint_sources(str(tmp_project)) != before
+
+
+def test_an_unparsed_file_type_does_not_change_the_fingerprint(tmp_project):
+    """
+    It must track exactly what the map reads. A README cannot change the map,
+    so it must not invalidate a cached one either.
+    """
+    before = fingerprint_sources(str(tmp_project))
+    (tmp_project / "NOTES.md").write_text("# prose nobody parses\n", encoding="utf-8")
+    assert fingerprint_sources(str(tmp_project)) == before
+
+
+def test_a_skipped_directory_does_not_change_the_fingerprint(tmp_project):
+    (tmp_project / "node_modules" / "pkg" / "new.js").write_text("export function n(){}\n")
+    before = fingerprint_sources(str(tmp_project))
+    (tmp_project / "node_modules" / "pkg" / "another.js").write_text("export function a(){}\n")
+    assert fingerprint_sources(str(tmp_project)) == before
+
+
+def test_an_unusable_path_has_no_fingerprint(tmp_path):
+    """Matches `build_repo_map`, so nothing is cached against a meaningful key."""
+    assert fingerprint_sources(str(tmp_path / "nope")) == ""

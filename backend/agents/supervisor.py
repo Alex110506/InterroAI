@@ -1,7 +1,7 @@
 """
 Central Hierarchical Orchestrator — Supervisor / Manager.
 
-Receives the final refined prompt from the Grill agent and drives the
+Receives the routed prompt from the chat session and drives the
 Coding Agent's Plan → Code → Verify cycle.
 
 `stream()` is the transport-agnostic form and is what the chat session uses.
