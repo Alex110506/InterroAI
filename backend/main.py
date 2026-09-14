@@ -1,11 +1,11 @@
 """
-InterroAI — optional HTTP surface.
+InterroAI — the local runtime's HTTP surface.
 
-The CLI (`cli/main.py`) is the primary frontend and drives the pipeline
-in-process; this module exposes the same pipeline over HTTP + WebSocket for
-anything that wants to drive it from another process or machine.
+The Electron app (`frontend/`) is the frontend. It drives the pipeline through
+this process over HTTP + WebSocket on 127.0.0.1:8000; `npm run dev` in
+`frontend/` starts both.
 
-Run it with:
+Run it on its own with:
     interroai-backend
     uvicorn main:app --reload --port 8000
 """

@@ -7,17 +7,16 @@ the client receives in what order — is pinned down too.
 """
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import pytest
-from conftest import make_response
+from conftest import FakeGateway, make_response
 from fastapi.testclient import TestClient
 
-import agents.coder as coder_mod
 import agents.session as session
-import core.project_index as project_index
+import core.index.indexer as indexer
+import core.index.semantic_index as semantic_index
+import core.workspace.project_index as project_index
 from agents.coder import CoderAgent
-from core.embeddings import EmbeddedBatch
+from core.index.embeddings import EmbeddedBatch
 from main import app
 
 
@@ -31,7 +30,9 @@ def captured_supervisor(monkeypatch):
     """Replace the supervisor so no agent or network work actually happens."""
     calls: list[dict] = []
 
-    async def fake_stream(prompt, project_path, model, intent="implement", history=None):
+    async def fake_stream(
+        prompt, project_path, model, intent="implement", history=None, gateway=None
+    ):
         calls.append(
             {"prompt": prompt, "project_path": project_path, "model": model, "intent": intent}
         )
@@ -42,7 +43,7 @@ def captured_supervisor(monkeypatch):
 
 
 def _fix_intent(monkeypatch, action):
-    async def fake_classify(message, index, history=None):
+    async def fake_classify(message, index, history=None, *, gateway=None):
         return action
 
     monkeypatch.setattr(session, "classify_intent", fake_classify)
@@ -139,8 +140,8 @@ def stub_embedding(monkeypatch):
         # Called once per batch now, so accumulate rather than overwrite.
         stored.setdefault("chunks", []).extend(chunks)
 
-    monkeypatch.setattr(project_index, "embed_batches", fake_batches)
-    monkeypatch.setattr(project_index, "store_chunks", fake_store)
+    monkeypatch.setattr(indexer, "embed_batches", fake_batches)
+    monkeypatch.setattr(indexer, "store_chunks", fake_store)
     return stored
 
 
@@ -216,8 +217,8 @@ def test_an_indexing_failure_is_reported_and_logged(client, tmp_project, monkeyp
         raise RuntimeError("provider exploded")
         yield  # pragma: no cover — makes this an async generator
 
-    monkeypatch.setattr(project_index, "embed_batches", boom)
-    with caplog.at_level("ERROR", logger="core.project_index"):
+    monkeypatch.setattr(indexer, "embed_batches", boom)
+    with caplog.at_level("ERROR", logger="core.index.indexer"):
         with client.websocket_connect("/api/projects/ws/embed") as ws:
             ws.send_json({"path": str(tmp_project)})
             events = _drain_steps(ws)
@@ -227,60 +228,61 @@ def test_an_indexing_failure_is_reported_and_logged(client, tmp_project, monkeyp
     assert any(r.exc_info for r in caplog.records), "the traceback must be kept"
 
 
-# ── Coder planning phase ─────────────────────────────────────────────────────
+async def test_a_search_after_indexing_reads_the_code_back_from_disk(
+    tmp_project, isolated_chroma, monkeypatch
+):
+    """
+    The whole of design B in one pass: index the project through the real
+    local index, then search it through the real agent. The index stored no
+    text, so every line of code in the result was read from the working tree.
+    """
+    vector = [0.1, 0.2, 0.3, 0.4]
+
+    async def fake_batches(texts, **kwargs):
+        yield EmbeddedBatch(indices=list(range(len(texts))), vectors=[vector for _ in texts])
+
+    async def fake_query(texts, **kwargs):
+        return [vector for _ in texts]
+
+    monkeypatch.setattr(indexer, "embed_batches", fake_batches)
+    monkeypatch.setattr(semantic_index, "embed_texts", fake_query)
+
+    events = [e async for e in project_index.embed_project(tmp_project)]
+    assert events[-1]["step"] == "done"
+
+    out = await CoderAgent(str(tmp_project), "gpt-5.4-mini")._search_semantic("greeting", n=10)
+    assert "class Greeter" in out
+    assert "stale" not in out
 
 
-class _FakeStream:
-    """Async-iterates OpenAI-shaped streaming deltas."""
-
-    def __init__(self, tokens):
-        self._tokens = list(tokens)
-
-    def __aiter__(self):
-        return self
-
-    async def __anext__(self):
-        if not self._tokens:
-            raise StopAsyncIteration
-        delta = SimpleNamespace(content=self._tokens.pop(0))
-        return SimpleNamespace(choices=[SimpleNamespace(delta=delta)])
+# ── Coder planning phase─────────────────────────────────────────────────────
 
 
-async def test_planning_streams_tokens_then_the_full_plan(tmp_project, monkeypatch):
+async def test_planning_streams_tokens_then_the_full_plan(tmp_project):
     """The right-hand panel fills live, so tokens must arrive individually."""
-    agent = CoderAgent(str(tmp_project), "gpt-5.4-mini")
-
-    async def fake_stream(client, **kwargs):
-        return _FakeStream(["1. ", "read ", "main.py"])
-
-    monkeypatch.setattr(coder_mod, "chat_stream", fake_stream)
+    gateway = FakeGateway(streams=[["1. ", "read ", "main.py"]])
+    agent = CoderAgent(str(tmp_project), "gpt-5.4-mini", gateway=gateway)
     events = [e async for e in agent._plan("task", "TREE")]
 
     assert [e["chunk"] for e in events if e["type"] == "plan_chunk"] == ["1. ", "read ", "main.py"]
     assert events[-1] == {"type": "plan", "content": "1. read main.py"}
 
 
-async def test_reasoning_models_plan_in_a_single_shot(tmp_project, monkeypatch):
-    """o1-family streaming is unreliable, so that path must not be used."""
-    agent = CoderAgent(str(tmp_project), "gpt-5.5-high-effort")
-
-    async def fake_completion(client, **kwargs):
-        assert "stream" not in kwargs
-        return make_response(content="1. do the thing")
-
-    monkeypatch.setattr(coder_mod, "chat_completion", fake_completion)
+async def test_reasoning_models_plan_in_a_single_shot(tmp_project):
+    """
+    o1-family streaming is unreliable, so that path must not be used — the
+    gateway has no stream queued, and would fail the test if asked for one.
+    """
+    gateway = FakeGateway([make_response(content="1. do the thing")])
+    agent = CoderAgent(str(tmp_project), "gpt-5.5-high-effort", gateway=gateway)
     events = [e async for e in agent._plan("task", "TREE")]
 
     assert events[-1] == {"type": "plan", "content": "1. do the thing"}
 
 
-async def test_empty_stream_tokens_are_ignored(tmp_project, monkeypatch):
-    agent = CoderAgent(str(tmp_project), "gpt-5.4-mini")
-
-    async def fake_stream(client, **kwargs):
-        return _FakeStream(["a", "", None, "b"])
-
-    monkeypatch.setattr(coder_mod, "chat_stream", fake_stream)
+async def test_empty_stream_tokens_are_ignored(tmp_project):
+    gateway = FakeGateway(streams=[["a", "", None, "b"]])
+    agent = CoderAgent(str(tmp_project), "gpt-5.4-mini", gateway=gateway)
     events = [e async for e in agent._plan("task", "TREE")]
 
     assert len([e for e in events if e["type"] == "plan_chunk"]) == 2
@@ -290,7 +292,6 @@ async def test_empty_stream_tokens_are_ignored(tmp_project, monkeypatch):
 async def test_a_full_implement_run_emits_the_expected_event_sequence(tmp_project, monkeypatch):
     """plan -> tools -> summary -> validation -> done."""
     agent = CoderAgent(str(tmp_project), "gpt-5.4-mini")
-    monkeypatch.setattr(coder_mod, "get_client", lambda timeout: object())
 
     async def fake_plan(prompt, tree):
         yield {"type": "plan", "content": "the plan"}
@@ -315,7 +316,6 @@ async def test_an_unexpected_failure_mid_run_is_logged_and_reported(
     tmp_project, monkeypatch, caplog
 ):
     agent = CoderAgent(str(tmp_project), "gpt-5.4-mini")
-    monkeypatch.setattr(coder_mod, "get_client", lambda timeout: object())
 
     async def boom(prompt, tree):
         raise RuntimeError("something broke")

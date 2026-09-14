@@ -4,8 +4,8 @@ Chat WebSocket endpoint.
 A transport adapter, nothing more: every frame is turned into a call on a
 `ChatSession` (`agents/session.py`) and every event the session emits is
 relayed back as JSON. The pipeline itself — intent classification, dispatch
-to the coder — lives in the session so the CLI can drive the identical flow
-without a socket.
+to the coder — lives in the session, so it can be driven and tested without a
+socket.
 
 Client frames:
   {"type": "start",       "project_path", "project_index", "message", "model",

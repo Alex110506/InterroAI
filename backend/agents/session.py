@@ -16,11 +16,15 @@ One user message flows through two steps:
     • answer:    Q&A agent, then finish
     • implement: coder directly
 
-`ChatSession` owns that flow and emits plain dict events. `api/chat.py` relays
-them as WebSocket frames; `cli/` renders them to the terminal. Neither the
-WebSocket nor the terminal appears below this line — which is the point: the
-pipeline had previously grown inside a WebSocket handler and could not be
-driven any other way.
+`ChatSession` owns that flow and emits plain dict events; `api/chat.py` relays
+them to the Electron app as WebSocket frames. The WebSocket never appears below
+this line — which is the point: the pipeline had previously grown inside a
+WebSocket handler and could not be driven any other way.
+
+Model calls go through a `ModelGateway` (`core/models/gateway.py`), handed in or chosen
+by `core.providers`. The session resolves it once and passes the same one to
+the classifier and the coder, so a request never talks to two different
+backends halfway through.
 
 A session is single-request and disposable, but not amnesiac: the caller hands
 it the conversation so far as `history`, so a follow-up like "sure" or "now do
@@ -35,8 +39,9 @@ from collections.abc import AsyncIterator
 
 from agents import supervisor
 from agents.coder import _MODEL_MAP as _CODER_MODEL_MAP
+from core import providers
 from core.errors import InterroAIError
-from core.llm import FAST_TIMEOUT, chat_completion, get_client
+from core.models.gateway import FAST_TIMEOUT, ModelGateway
 
 logger = logging.getLogger(__name__)
 
@@ -45,8 +50,10 @@ logger = logging.getLogger(__name__)
 # substituting a different (possibly pricier) model.
 _DEFAULT_MODEL = "gpt-5.4-high-effort"
 
-#: Display IDs a caller may choose from, best-first. The CLI's `/model` picker
-#: and the backend's validation therefore cannot drift apart.
+#: Display IDs a caller may choose from, best-first. `test_session.py` holds
+#: this equal to the coder's model map, so validation cannot drift from what the
+#: coder resolves. (The Electron picker keeps its own copy, `MODELS` in
+#: `frontend/src/components/ChatPanel.jsx`, which nothing checks.)
 AVAILABLE_MODELS: tuple[str, ...] = (
     "gpt-5.5-high-effort",
     "gpt-5.5-low-effort",
@@ -136,6 +143,8 @@ async def classify_intent(
     user_message: str,
     project_index: dict,
     history: list[dict] | None = None,
+    *,
+    gateway: ModelGateway | None = None,
 ) -> str:
     """
     2-way intent classifier. Returns: 'answer' | 'implement'.
@@ -151,9 +160,9 @@ async def classify_intent(
     git_str = _fmt_git(project_index.get("git_context") or {})
     context = f"PROJECT STRUCTURE:\n{tree_str or '(empty)'}\n\nGIT CONTEXT:\n{git_str}"
 
-    client = get_client(FAST_TIMEOUT)
-    response = await chat_completion(
-        client,
+    gateway = gateway or providers.model_gateway()
+    response = await gateway.chat(
+        timeout=FAST_TIMEOUT,
         model="gpt-5.4-mini",
         messages=[
             {"role": "system", "content": f"{_INTENT_SYSTEM}\n\n{context}"},
@@ -205,11 +214,13 @@ class ChatSession:
         project_index: dict | None = None,
         model: str | None = None,
         history: list[dict] | None = None,
+        gateway: ModelGateway | None = None,
     ) -> None:
         self.project_path = project_path
         self.project_index = project_index or {}
         self.model = model or _DEFAULT_MODEL
         self.history = trim_history(history)
+        self.gateway = gateway or providers.model_gateway()
         self.finished = False
 
     # ── Public entry point ────────────────────────────────────────────────
@@ -230,7 +241,9 @@ class ChatSession:
     # ── Routing ───────────────────────────────────────────────────────────
 
     async def _route(self, user_message: str) -> AsyncIterator[dict]:
-        action = await classify_intent(user_message, self.project_index, self.history)
+        action = await classify_intent(
+            user_message, self.project_index, self.history, gateway=self.gateway
+        )
         logger.info("Intent classified: %r", action)
 
         yield {"type": "ready", "refined_prompt": user_message}
@@ -245,7 +258,12 @@ class ChatSession:
 
     async def _stream_agent(self, prompt: str, *, intent: str) -> AsyncIterator[dict]:
         async for event in supervisor.stream(
-            prompt, self.project_path, self.model, intent=intent, history=self.history
+            prompt,
+            self.project_path,
+            self.model,
+            intent=intent,
+            history=self.history,
+            gateway=self.gateway,
         ):
             yield event
         self.finished = True

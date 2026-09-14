@@ -14,6 +14,10 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncIterator
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from core.models.gateway import ModelGateway
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +28,7 @@ async def stream(
     model: str,
     intent: str = "implement",
     history: list[dict] | None = None,
+    gateway: ModelGateway | None = None,
 ) -> AsyncIterator[dict]:
     """Run the Coding Agent, yielding each of its events in order."""
     from agents.coder import CoderAgent
@@ -31,7 +36,7 @@ async def stream(
     logger.info("Task starting | model=%r | project=%r", model, Path(project_path).name)
 
     agent = CoderAgent(
-        project_path=project_path, model=model, intent=intent, history=history
+        project_path=project_path, model=model, intent=intent, history=history, gateway=gateway
     )
     async for event in agent.execute(prompt):
         logger.info("coder event: %s", event.get("type"))
@@ -47,9 +52,12 @@ async def run(
     websocket=None,
     intent: str = "implement",
     history: list[dict] | None = None,
+    gateway: ModelGateway | None = None,
 ) -> None:
     """Drive `stream()` and relay every event over *websocket*, if given."""
-    async for event in stream(prompt, project_path, model, intent=intent, history=history):
+    async for event in stream(
+        prompt, project_path, model, intent=intent, history=history, gateway=gateway
+    ):
         if websocket is not None:
             try:
                 await websocket.send_json(event)

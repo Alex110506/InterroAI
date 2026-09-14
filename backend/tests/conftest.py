@@ -5,6 +5,10 @@ The HOME redirect at the top of this module is load-bearing and must stay
 before every application import: `config.py` instantiates `_AppConfig()` at
 *import* time, which writes into `~/.interroai`. Redirecting HOME first keeps
 the developer's real config and Chroma store untouched by a test run.
+
+Model calls are faked at the `ModelGateway` port (`FakeGateway`, handed to the
+code under test), not by patching `core.models.llm`. Only the tests of `core.models.llm`
+itself and of the embedding client still stub the OpenAI SDK directly.
 """
 from __future__ import annotations
 
@@ -22,10 +26,10 @@ from types import SimpleNamespace  # noqa: E402
 import pytest  # noqa: E402
 from redis.exceptions import RedisError  # noqa: E402
 
-import core.cache as cache_module  # noqa: E402
-import core.llm as llm_module  # noqa: E402
-import core.security as security  # noqa: E402
-import core.vector_store as vector_store  # noqa: E402
+import core.index.vector_store as vector_store  # noqa: E402
+import core.local.cache as cache_module  # noqa: E402
+import core.local.security as security  # noqa: E402
+import core.models.llm as llm_module  # noqa: E402
 
 # ── Fake OpenAI plumbing ─────────────────────────────────────────────────────
 
@@ -43,6 +47,59 @@ def make_response(content: str | None = None, tool_calls: list | None = None):
     """Mimic the shape of an OpenAI chat completion response."""
     message = SimpleNamespace(content=content, tool_calls=tool_calls)
     return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+
+class FakeStream:
+    """Async-iterates OpenAI-shaped streaming deltas, one per token."""
+
+    def __init__(self, tokens):
+        self._tokens = list(tokens)
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if not self._tokens:
+            raise StopAsyncIteration
+        delta = SimpleNamespace(content=self._tokens.pop(0))
+        return SimpleNamespace(choices=[SimpleNamespace(delta=delta)])
+
+
+class FakeGateway:
+    """
+    A `ModelGateway` that replays queued replies and records every request.
+
+    `replies` answer `chat` in order; `streams` (each a list of tokens) answer
+    `chat_stream`. An exception in either queue is raised instead of returned,
+    which is how a test makes the provider fail. Calling with nothing queued is
+    an assertion failure, so an unexpected model call cannot pass unnoticed.
+    """
+
+    def __init__(self, replies=(), *, streams=()):
+        self._replies = list(replies)
+        self._streams = list(streams)
+        self.requests: list[dict] = []
+        self.timeouts: list = []
+
+    async def chat(self, *, timeout=None, **request):
+        return self._next(self._replies, "chat", timeout, request)
+
+    async def chat_stream(self, *, timeout=None, **request):
+        return FakeStream(self._next(self._streams, "chat_stream", timeout, request))
+
+    def _next(self, queue, name, timeout, request):
+        # Snapshot `messages`: the agent appends the reply to the same list
+        # after the call, which would otherwise rewrite what was recorded.
+        self.requests.append(
+            {key: list(value) if key == "messages" else value for key, value in request.items()}
+        )
+        self.timeouts.append(timeout)
+        if not queue:
+            raise AssertionError(f"FakeGateway.{name} was called with nothing queued")
+        item = queue.pop(0)
+        if isinstance(item, BaseException):
+            raise item
+        return item
 
 
 class FakeCompletions:
@@ -86,7 +143,7 @@ def fake_client():
 
 @pytest.fixture
 def with_api_key(monkeypatch):
-    """Make `core.llm.get_client` believe a key is stored."""
+    """Make `core.models.llm.get_client` believe a key is stored."""
     monkeypatch.setattr(llm_module, "retrieve_openai_key", lambda: "sk-test-key")
     llm_module._clients.clear()
     yield "sk-test-key"
@@ -117,7 +174,7 @@ def fake_keyring(monkeypatch):
 
 @pytest.fixture
 def without_api_key(monkeypatch):
-    """Make `core.llm.get_client` believe no key is stored."""
+    """Make `core.models.llm.get_client` believe no key is stored."""
     monkeypatch.setattr(llm_module, "retrieve_openai_key", lambda: None)
     llm_module._clients.clear()
     yield
@@ -136,7 +193,7 @@ def isolated_chroma(tmp_path, monkeypatch):
 
 
 class FakePipeline:
-    """`core.cache` queues SETs and executes them in one go."""
+    """`core.local.cache` queues SETs and executes them in one go."""
 
     def __init__(self, client: FakeRedis) -> None:
         self._client = client
@@ -156,9 +213,9 @@ class FakePipeline:
 
 class FakeRedis:
     """
-    The slice of `redis.asyncio.Redis` that `core.cache` actually uses.
+    The slice of `redis.asyncio.Redis` that `core.local.cache` actually uses.
 
-    In-memory, so `core/cache.py`'s own keying and float32 packing still get
+    In-memory, so `core/local/cache.py`'s own keying and float32 packing still get
     exercised by every test that reaches the cache, without a server.
     """
 

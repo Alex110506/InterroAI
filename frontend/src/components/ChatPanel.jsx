@@ -9,7 +9,9 @@ import {
 import { api } from '../lib/api'
 import s from './ChatPanel.module.css'
 
-/* ─── Per-project message history (runtime, no persistence yet) ─────── */
+/* ─── Per-project message history ──────────────────────────────────────
+ * In memory only. The backend stores no transcript: every request re-sends
+ * the conversation as `history`, and closing the app ends it. */
 const projectMessages = {}
 
 /* Turn the panel's own message list into the OpenAI message shape the
@@ -200,34 +202,17 @@ export default function ChatPanel({ activeId, projects, thoughtOpen, onToggleTho
     setIsLoading(false)
     setInput('')
     bottomRef.current?.scrollIntoView({ behavior: 'instant' })
-
-    if (activeId && project?.folderPath) {
-      api.getHistory(project.folderPath)
-        .then((res) => {
-          projectMessages[activeId] = res.messages || []
-          forceUpdate((n) => n + 1)
-          setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'instant' }), 50)
-        })
-        .catch(console.error)
-    }
-  }, [activeId, project?.folderPath])
+  }, [activeId])
 
   const messages = activeId ? (projectMessages[activeId] ?? []) : []
 
   const addMessage = useCallback((msg) => {
     if (!activeId) return
     if (!projectMessages[activeId]) projectMessages[activeId] = []
-    
-    const newMsg = msg.id ? msg : { id: Date.now() + Math.random().toString(), ...msg }
-    projectMessages[activeId].push(newMsg)
-    
-    if (!msg.id && project?.folderPath) {
-      api.saveMessage(project.folderPath, newMsg).catch(console.error)
-    }
-    
+    projectMessages[activeId].push({ id: Date.now() + Math.random().toString(), ...msg })
     forceUpdate((n) => n + 1)
     setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }), 50)
-  }, [activeId, project?.folderPath])
+  }, [activeId])
 
   /* ── WebSocket message handler ── */
   const handleWsMessage = useCallback((event) => {

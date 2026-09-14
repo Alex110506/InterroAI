@@ -27,7 +27,7 @@ class MissingAPIKeyError(InterroAIError):
 
     def __init__(
         self,
-        message: str = "No OpenAI API key configured — add yours with /user.",
+        message: str = "No OpenAI API key configured — add yours in Settings.",
     ) -> None:
         super().__init__(message)
 
@@ -36,7 +36,7 @@ class UpstreamLLMError(InterroAIError):
     """
     An OpenAI request failed and could not be recovered.
 
-    Raised after the retry policy in `core.llm` has exhausted its attempts, so
+    Raised after the retry policy in `core.models.llm` has exhausted its attempts, so
     reaching this means the provider was genuinely unavailable rather than
     momentarily flaky.
     """

@@ -1,7 +1,7 @@
 """
 Project indexing HTTP/WebSocket surface.
 
-A transport adapter over `core/project_index.py`, which owns the actual
+A transport adapter over `core/workspace/project_index.py`, which owns the actual
 scanning, chunking, embedding and storage:
 
   Phase 1 (POST /index):          file tree + git context → ProjectIndex JSON.
@@ -14,7 +14,7 @@ import logging
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 
-from core.project_index import ProjectIndex, ProjectPathError, build_index, embed_project
+from core.workspace.project_index import ProjectIndex, ProjectPathError, build_index, embed_project
 
 logger = logging.getLogger(__name__)
 

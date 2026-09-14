@@ -21,26 +21,24 @@ import json
 import logging
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from openai import AsyncOpenAI
-
-logger = logging.getLogger(__name__)
-
-from core import cache  # noqa: E402
-from core.ast_map import build_repo_map, fingerprint_sources  # noqa: E402
-from core.embeddings import embed_texts  # noqa: E402
-from core.errors import (  # noqa: E402
+from contracts.indexing import SearchHit, SearchRequest
+from core import providers
+from core.errors import (
     FileNotFoundInProjectError,
     InterroAIError,
     PathEscapeError,
     ToolError,
 )
-from core.llm import LONG_TIMEOUT, chat_completion, chat_stream, get_client  # noqa: E402
-from core.patcher import apply_patch  # noqa: E402
-from core.sandbox import run_linter, run_tests  # noqa: E402
-from core.vector_store import search_chunks  # noqa: E402
+from core.index.semantic_index import SemanticIndex
+from core.local import cache
+from core.models.gateway import LONG_TIMEOUT, ModelGateway
+from core.workspace.ast_map import build_repo_map, fingerprint_sources
+from core.workspace.hashing import file_hash
+from core.workspace.patcher import apply_patch
+from core.workspace.sandbox import run_linter, run_tests
+
+logger = logging.getLogger(__name__)
 
 _MAX_TOOL_ROUNDS = 20
 _MAX_CORRECTIONS = 3
@@ -214,6 +212,8 @@ class CoderAgent:
         model: str,
         intent: str = "implement",
         history: list[dict] | None = None,
+        gateway: ModelGateway | None = None,
+        index: SemanticIndex | None = None,
     ) -> None:
         self._intent = intent
         # Prior turns of this conversation, spliced in ahead of the current
@@ -222,7 +222,10 @@ class CoderAgent:
         self._path = Path(project_path).resolve()
         self._api_model = _MODEL_MAP.get(model, model)   # resolve display ID → real API ID
         self._is_reasoning = self._api_model in _REASONING_MODELS
-        self._client: AsyncOpenAI | None = None
+        # Where model calls and semantic searches go. The agent neither knows
+        # nor cares whether that is OpenAI and a local index, or the cloud.
+        self._gateway = gateway or providers.model_gateway()
+        self._index = index or providers.semantic_index()
         self._modified: set[str] = set()   # absolute paths of files written/patched
         logger.info("CoderAgent init: requested=%r  api_model=%r  reasoning=%s",
                     model, self._api_model, self._is_reasoning)
@@ -235,13 +238,6 @@ class CoderAgent:
             return
 
         logger.info("CoderAgent.execute: project=%r  api_model=%r", str(self._path), self._api_model)  # noqa: E501
-
-        try:
-            self._client = get_client(LONG_TIMEOUT)
-        except InterroAIError as exc:
-            # Expected and actionable (e.g. no API key) — show it as-is.
-            yield {"type": "error", "message": str(exc)}
-            return
 
         try:
             knowledge_tree = await self._build_knowledge_tree()
@@ -312,8 +308,8 @@ class CoderAgent:
 
         if self._is_reasoning:
             # o1-family doesn't stream reliably — single-shot call
-            response = await chat_completion(
-                self._client,
+            response = await self._gateway.chat(
+                timeout=LONG_TIMEOUT,
                 **self._build_create_kwargs(messages=messages, temperature=0.2),
             )
             content = response.choices[0].message.content or ""
@@ -322,10 +318,10 @@ class CoderAgent:
             return
 
         # Streaming: emit tokens as they arrive so the right panel fills live.
-        # Only the handshake is retried; see core.llm.chat_stream.
+        # Only the handshake is retried; see ModelGateway.chat_stream.
         full = ""
-        stream = await chat_stream(
-            self._client,
+        stream = await self._gateway.chat_stream(
+            timeout=LONG_TIMEOUT,
             **self._build_create_kwargs(messages=messages, temperature=0.2),
         )
         async for chunk in stream:
@@ -341,8 +337,8 @@ class CoderAgent:
         if tools is None:
             tools = _TOOLS
         for _ in range(_MAX_TOOL_ROUNDS):
-            response = await chat_completion(
-                self._client,
+            response = await self._gateway.chat(
+                timeout=LONG_TIMEOUT,
                 **self._build_create_kwargs(
                     messages=messages,
                     temperature=0.1,
@@ -477,9 +473,53 @@ class CoderAgent:
 
     async def _search_semantic(self, query: str, n: int = 5) -> str:
         n = min(max(1, int(n)), 10)
-        embeddings = await embed_texts([query])
-        chunks = search_chunks(str(self._path), embeddings[0], n=n)
-        return _fmt_chunks(chunks) if chunks else "No semantically similar code found."
+        hits = await self._index.search(
+            SearchRequest(project_id=str(self._path), query=query, n=n)
+        )
+        return self._format_hits(hits)
+
+    def _format_hits(self, hits: list[SearchHit]) -> str:
+        """
+        Turn index hits into code the model can read — read from *this* disk.
+
+        The index says where to look and what the file hashed to when it was
+        indexed; the text comes from the working tree. When the hash no longer
+        matches, the file has been edited since and the lines may have shifted.
+        The hit is still shown, since it is usually close, but labelled so the
+        model reads the file before trusting a line number.
+
+        A hit whose file is gone, whose lines no longer exist, or whose path
+        points outside the project is dropped: there is nothing true to show,
+        and an index is not trusted to name paths the agent may read.
+        """
+        files: dict[Path, tuple[list[str], str]] = {}
+        parts: list[str] = []
+
+        for hit in hits:
+            try:
+                path = self._resolve(hit.file_path)
+            except PathEscapeError:
+                logger.warning("Dropping a search hit outside the project: %r", hit.file_path)
+                continue
+
+            if path not in files:
+                try:
+                    text = path.read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    continue
+                files[path] = (text.splitlines(keepends=True), file_hash(path))
+            lines, current_hash = files[path]
+
+            excerpt = "".join(lines[hit.start_line - 1 : hit.end_line])
+            if not excerpt.strip():
+                continue
+
+            header = f"// {hit.file_path}  (lines {hit.start_line}–{hit.end_line})"
+            if current_hash != hit.file_hash:
+                header += "  [stale: changed since indexing, lines may have moved — read_file first]"  # noqa: E501
+            parts.append(f"{header}\n{excerpt}")
+
+        return "\n\n---\n\n".join(parts) if parts else "No semantically similar code found."
 
     def _resolve(self, path: str) -> Path:
         resolved = (self._path / path).resolve()
@@ -574,13 +614,3 @@ class CoderAgent:
             f"<repo_map>\n{repo_map or '(empty)'}\n</repo_map>\n\n"
             "</knowledge_tree>"
         )
-
-
-def _fmt_chunks(chunks: list[dict]) -> str:
-    if not chunks:
-        return "No relevant code found in the vector store."
-    parts = []
-    for c in chunks:
-        header = f"// {c['file_path']}  (lines {c['start_line']}–{c['end_line']})"
-        parts.append(f"{header}\n{c['content']}")
-    return "\n\n---\n\n".join(parts)

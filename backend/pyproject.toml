@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "interroai-backend"
 version = "0.1.0"
-description = "FastAPI orchestrator for InterroAI — a local desktop AI multi-agent coding platform"
+description = "Local runtime for InterroAI — the agent, its tools and the indexing pipeline behind the Electron app"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 
@@ -25,8 +25,6 @@ dependencies = [
     "langchain-text-splitters>=0.2.0",
     "tenacity>=8.2.0",
     "redis>=5.0.0",
-    "rich>=13.7.0",
-    "prompt-toolkit>=3.0.43",
 ]
 
 [project.optional-dependencies]
@@ -38,15 +36,23 @@ dev = [
 ]
 
 [project.scripts]
-interroai = "cli.main:main"
 interroai-backend = "main:run"
 
 # ── Packaging ────────────────────────────────────────────────────────────────
 # Flat layout (main.py + config.py at the root, alongside the api/, agents/,
-# cli/ and core/ packages), so setuptools' auto-discovery is ambiguous and we
-# declare the members explicitly.
+# contracts/ and core/ packages), so setuptools' auto-discovery is ambiguous
+# and we declare the members explicitly.
 [tool.setuptools]
-packages = ["api", "agents", "cli", "core"]
+packages = [
+    "api",
+    "agents",
+    "contracts",
+    "core",
+    "core.index",
+    "core.local",
+    "core.models",
+    "core.workspace",
+]
 py-modules = ["main", "config"]
 
 # ── Tooling ──────────────────────────────────────────────────────────────────
@@ -77,7 +83,7 @@ pythonpath = ["."]
 addopts = "-q"
 
 [tool.coverage.run]
-source = ["api", "agents", "cli", "core"]
+source = ["api", "agents", "contracts", "core"]
 omit = ["tests/*"]
 
 [tool.coverage.report]
