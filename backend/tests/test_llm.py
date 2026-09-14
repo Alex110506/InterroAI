@@ -138,7 +138,7 @@ async def test_retries_give_up_after_the_attempt_budget(fake_client):
 async def test_deterministic_failures_are_not_retried(fake_client, make_error):
     """Retrying a bad key or a malformed request only wastes time and money."""
     client = fake_client([make_error() for _ in range(5)])
-    with pytest.raises(Exception):
+    with pytest.raises(Exception):  # noqa: B017
         await _instant(llm.chat_completion)(client, model="m")
     assert len(client.calls) == 1
 

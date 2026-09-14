@@ -28,19 +28,19 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-from core import cache
-from core.ast_map import build_repo_map, fingerprint_sources
-from core.embeddings import embed_texts
-from core.errors import (
+from core import cache  # noqa: E402
+from core.ast_map import build_repo_map, fingerprint_sources  # noqa: E402
+from core.embeddings import embed_texts  # noqa: E402
+from core.errors import (  # noqa: E402
     FileNotFoundInProjectError,
     InterroAIError,
     PathEscapeError,
     ToolError,
 )
-from core.llm import LONG_TIMEOUT, chat_completion, chat_stream, get_client
-from core.patcher import apply_patch
-from core.sandbox import run_linter, run_tests
-from core.vector_store import search_chunks
+from core.llm import LONG_TIMEOUT, chat_completion, chat_stream, get_client  # noqa: E402
+from core.patcher import apply_patch  # noqa: E402
+from core.sandbox import run_linter, run_tests  # noqa: E402
+from core.vector_store import search_chunks  # noqa: E402
 
 _MAX_TOOL_ROUNDS = 20
 _MAX_CORRECTIONS = 3
@@ -56,7 +56,7 @@ _MODEL_MAP: dict[str, str] = {
 
 # Reasoning models require temperature to be omitted
 # gpt-5.4 and gpt-5.5 are high-reasoning models — omit temperature to avoid API errors
-_REASONING_MODELS = {"gpt-5.5", "gpt-5.4", "o1", "o1-mini", "o1-preview", "o3", "o3-mini", "o4-mini"}
+_REASONING_MODELS = {"gpt-5.5", "gpt-5.4", "o1", "o1-mini", "o1-preview", "o3", "o3-mini", "o4-mini"}  # noqa: E501
 
 # ── Tool schemas ──────────────────────────────────────────────────────────────
 
@@ -70,8 +70,8 @@ _TOOLS = [
                 "type": "object",
                 "properties": {
                     "path": {"type": "string", "description": "Path relative to project root."},
-                    "line_start": {"type": "integer", "description": "First line to read (1-indexed). Omit to start from line 1."},
-                    "line_end": {"type": "integer", "description": "Last line to read (inclusive). Omit to read to end of file."},
+                    "line_start": {"type": "integer", "description": "First line to read (1-indexed). Omit to start from line 1."},  # noqa: E501
+                    "line_end": {"type": "integer", "description": "Last line to read (inclusive). Omit to read to end of file."},  # noqa: E501
                 },
                 "required": ["path"],
             },
@@ -81,7 +81,7 @@ _TOOLS = [
         "type": "function",
         "function": {
             "name": "write_file",
-            "description": "Create or overwrite a file. Use only for brand-new files; use patch_file to edit existing ones.",
+            "description": "Create or overwrite a file. Use only for brand-new files; use patch_file to edit existing ones.",  # noqa: E501
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -98,7 +98,7 @@ _TOOLS = [
             "name": "patch_file",
             "description": (
                 "Apply a search-and-replace edit to an existing file. "
-                "The search_block must match the file verbatim (correct indentation, no approximations). "
+                "The search_block must match the file verbatim (correct indentation, no approximations). "  # noqa: E501
                 "Always read_file first to confirm the exact text."
             ),
             "parameters": {
@@ -116,12 +116,12 @@ _TOOLS = [
         "type": "function",
         "function": {
             "name": "search_grep",
-            "description": "Search the project for a string or regex pattern. Returns matching lines with file:line context. Use when you know the exact name or string.",
+            "description": "Search the project for a string or regex pattern. Returns matching lines with file:line context. Use when you know the exact name or string.",  # noqa: E501
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "pattern": {"type": "string", "description": "Substring or regex to search for."},
-                    "file_glob": {"type": "string", "description": "Optional glob to limit scope, e.g. '*.py'."},
+                    "pattern": {"type": "string", "description": "Substring or regex to search for."},  # noqa: E501
+                    "file_glob": {"type": "string", "description": "Optional glob to limit scope, e.g. '*.py'."},  # noqa: E501
                 },
                 "required": ["pattern"],
             },
@@ -139,8 +139,8 @@ _TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "Natural-language description of the code you're looking for."},
-                    "n": {"type": "integer", "description": "Number of results (default 5, max 10)."},
+                    "query": {"type": "string", "description": "Natural-language description of the code you're looking for."},  # noqa: E501
+                    "n": {"type": "integer", "description": "Number of results (default 5, max 10)."},  # noqa: E501
                 },
                 "required": ["query"],
             },
@@ -234,7 +234,7 @@ class CoderAgent:
             yield {"type": "error", "message": f"Project directory not found: {self._path}"}
             return
 
-        logger.info("CoderAgent.execute: project=%r  api_model=%r", str(self._path), self._api_model)
+        logger.info("CoderAgent.execute: project=%r  api_model=%r", str(self._path), self._api_model)  # noqa: E501
 
         try:
             self._client = get_client(LONG_TIMEOUT)
@@ -247,7 +247,7 @@ class CoderAgent:
             knowledge_tree = await self._build_knowledge_tree()
 
             if self._intent == "answer":
-                read_tools = [t for t in _TOOLS if t["function"]["name"] in {"read_file", "search_grep", "search_semantic"}]
+                read_tools = [t for t in _TOOLS if t["function"]["name"] in {"read_file", "search_grep", "search_semantic"}]  # noqa: E501
                 messages = [
                     {"role": "system", "content": _QA_IMPL_SYSTEM},
                     *self._history,
@@ -272,7 +272,7 @@ class CoderAgent:
             messages: list[dict] = [
                 {"role": "system", "content": _IMPL_SYSTEM},
                 *self._history,
-                {"role": "user", "content": f"{knowledge_tree}\n\nTASK:\n{prompt}\n\nPLAN:\n{plan}"},
+                {"role": "user", "content": f"{knowledge_tree}\n\nTASK:\n{prompt}\n\nPLAN:\n{plan}"},  # noqa: E501
             ]
 
             summary = ""
@@ -381,7 +381,7 @@ class CoderAgent:
 
                 messages.append({"role": "tool", "tool_call_id": tc.id, "content": result})
 
-        yield {"type": "impl_done", "content": "Implementation complete (tool round limit reached)."}
+        yield {"type": "impl_done", "content": "Implementation complete (tool round limit reached)."}  # noqa: E501
 
     # ── Phase 3: Validation + self-correction ──────────────────────────────
 
@@ -422,7 +422,7 @@ class CoderAgent:
 
             yield {"type": "correction", "attempt": attempt + 1, "errors": errors}
 
-            messages.append({"role": "user", "content": f"Validation failed — fix the errors:\n\n{errors}"})
+            messages.append({"role": "user", "content": f"Validation failed — fix the errors:\n\n{errors}"})  # noqa: E501
             async for event in self._tool_loop(messages):
                 yield event
 

@@ -1,5 +1,7 @@
 # InterroAI
 
+[![CI](https://github.com/Alex110506/InterroAI/actions/workflows/ci.yml/badge.svg)](https://github.com/Alex110506/InterroAI/actions/workflows/ci.yml)
+
 InterroAI is a local, terminal-based AI coding agent. It indexes the project you point it at, then runs a Plan → Code → Verify cycle against your workspace.
 
 Every request is classified before anything runs: a question gets a read-only, grounded answer; anything that would change the codebase goes through the full Plan → Code → Verify cycle, informed by your actual file tree, git state and a semantic index of your codebase.

@@ -124,7 +124,7 @@ def test_asking_for_more_than_exists_returns_what_there_is(isolated_chroma):
 def test_nearest_neighbour_ranks_first(isolated_chroma):
     store_chunks(
         "/p",
-        [_chunk(path="a.py", start=1, content="alpha"), _chunk(path="b.py", start=1, content="beta")],
+        [_chunk(path="a.py", start=1, content="alpha"), _chunk(path="b.py", start=1, content="beta")],  # noqa: E501
         [[1.0] + [0.0] * (DIM - 1), [0.0] * (DIM - 1) + [1.0]],
     )
     top = search_chunks("/p", [1.0] + [0.0] * (DIM - 1), n=1)[0]

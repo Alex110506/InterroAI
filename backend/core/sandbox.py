@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 _TIMEOUT_SECONDS = 60
 
 
-class CheckStatus(str, Enum):
+class CheckStatus(str, Enum):  # noqa: UP042
     PASSED = "passed"
     FAILED = "failed"
     SKIPPED = "skipped"   # the check could not run; it did NOT succeed

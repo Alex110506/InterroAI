@@ -42,7 +42,7 @@ def test_status_serialises_as_a_plain_string():
 
 def test_result_is_immutable():
     result = CheckResult(CheckStatus.PASSED, "")
-    with pytest.raises(Exception):
+    with pytest.raises(Exception):  # noqa: B017
         result.status = CheckStatus.FAILED
 
 

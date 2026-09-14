@@ -251,6 +251,6 @@ def tmp_project(tmp_path) -> Path:
     (root / "README.md").write_text("# Demo\n\nSome prose.\n", encoding="utf-8")
     (root / "ignored" / "secret.py").write_text("TOKEN = 'x'\n", encoding="utf-8")
     (root / "debug.log").write_text("noise\n", encoding="utf-8")
-    (root / "node_modules" / "pkg" / "index.js").write_text("export function v() {}\n", encoding="utf-8")
+    (root / "node_modules" / "pkg" / "index.js").write_text("export function v() {}\n", encoding="utf-8")  # noqa: E501
     (root / ".hidden" / "x.py").write_text("HIDDEN = 1\n", encoding="utf-8")
     return root
