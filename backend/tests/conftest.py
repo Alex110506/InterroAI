@@ -31,7 +31,7 @@ from types import SimpleNamespace  # noqa: E402
 import pytest  # noqa: E402
 from redis.exceptions import RedisError  # noqa: E402
 
-import core.index.vector_store as vector_store  # noqa: E402
+import core.index.adapters.chroma as vector_store  # noqa: E402
 import core.local.cache as cache_module  # noqa: E402
 import core.local.security as security  # noqa: E402
 import core.models.llm as llm_module  # noqa: E402

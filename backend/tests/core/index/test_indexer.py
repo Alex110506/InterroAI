@@ -8,13 +8,17 @@ must be able to run where the repository never was.
 """
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
+import core.index.embeddings as embeddings
 import core.index.indexer as indexer
 from contracts.indexing import Chunk, ChunkUpload
 from core.errors import MissingAPIKeyError
-from core.index.embeddings import EmbeddedBatch
-from core.index.vector_store import collection_size, store_chunks, stored_manifest
+from core.index.adapters.chroma import ChromaChunkStore, store_chunks, stored_manifest
+from core.index.adapters.memory import InMemoryEmbeddingCache
+from core.index.embeddings import _BATCH_SIZE, EmbeddedBatch
 
 VECTOR = [0.1, 0.2, 0.3, 0.4]
 
@@ -48,8 +52,20 @@ def _store(project, *chunks: Chunk) -> None:
     store_chunks(project, [c.model_dump() for c in chunks], [VECTOR for _ in chunks])
 
 
-async def _run(upload: ChunkUpload):
-    return [event async for event in indexer.run_job(upload)]
+class SpyStore(ChromaChunkStore):
+    """The real store, counting how many times the index is written."""
+
+    def __init__(self) -> None:
+        self.applies = 0
+
+    async def apply(self, project_id, **kwargs):
+        self.applies += 1
+        return await super().apply(project_id, **kwargs)
+
+
+async def _run(upload: ChunkUpload, *, store=None, cache=None):
+    store = ChromaChunkStore() if store is None else store
+    return [event async for event in indexer.run_job(upload, store=store, cache=cache)]
 
 
 # ── Storing ──────────────────────────────────────────────────────────────────
@@ -87,6 +103,85 @@ async def test_a_job_with_nothing_to_embed_makes_no_embedding_call(
     assert events[-1].step == "done"
 
 
+# ── One write, at the end ────────────────────────────────────────────────────
+
+
+async def test_the_index_is_written_once_however_many_batches(
+    project, isolated_chroma, monkeypatch
+):
+    async def two_batches(texts, **kwargs):
+        yield EmbeddedBatch(indices=[0], vectors=[VECTOR])
+        yield EmbeddedBatch(indices=[1], vectors=[VECTOR])
+
+    monkeypatch.setattr(indexer, "embed_batches", two_batches)
+    store = SpyStore()
+
+    await _run(
+        ChunkUpload(
+            project_id=project, chunks=[_chunk(start=1), _chunk(start=40)], changed_paths=["a.py"]
+        ),
+        store=store,
+    )
+
+    assert store.applies == 1
+    assert len(stored_manifest(project)["a.py"].ids) == 2
+
+
+async def test_a_failed_job_leaves_the_index_exactly_as_it_was(
+    project, isolated_chroma, monkeypatch
+):
+    """Nothing is written until everything is embedded: a search sees before, never half."""
+    async def one_batch_then_boom(texts, **kwargs):
+        yield EmbeddedBatch(indices=[0], vectors=[VECTOR])
+        raise RuntimeError("provider exploded")
+
+    monkeypatch.setattr(indexer, "embed_batches", one_batch_then_boom)
+    _store(project, _chunk(path="gone.py"))
+
+    events = await _run(
+        ChunkUpload(
+            project_id=project,
+            chunks=[_chunk(start=1), _chunk(start=40)],
+            changed_paths=["a.py"],
+            removed_paths=["gone.py"],
+        )
+    )
+
+    assert events[-1].step == "error"
+    assert "provider exploded" in events[-1].message
+    assert set(stored_manifest(project)) == {"gone.py"}, "neither the new chunks nor the prune"
+
+
+async def test_a_retried_job_pays_only_for_what_never_succeeded(
+    project, isolated_chroma, monkeypatch
+):
+    """Batches finished before the failure are in the cache, so the retry skips them."""
+    monkeypatch.setattr(embeddings, "get_client", lambda timeout: object())
+    requested: list[int] = []
+    fail_on_request = 2
+
+    async def provider(_client, **kwargs):
+        requested.append(len(kwargs["input"]))
+        if len(requested) == fail_on_request:
+            raise RuntimeError("provider exploded")
+        return SimpleNamespace(data=[SimpleNamespace(embedding=VECTOR) for _ in kwargs["input"]])
+
+    monkeypatch.setattr(embeddings, "embed_batch", provider)
+    cache = InMemoryEmbeddingCache()
+    chunks = [_chunk(start=i, content=f"line {i}") for i in range(1, _BATCH_SIZE + 21)]
+    upload = ChunkUpload(project_id=project, chunks=chunks, changed_paths=["a.py"])
+
+    first = await _run(upload, cache=cache)
+    assert first[-1].step == "error"
+
+    requested.clear()
+    fail_on_request = 0
+    second = await _run(upload, cache=cache)
+
+    assert second[-1].step == "done"
+    assert requested == [20], "only the batch that failed may be embedded again"
+
+
 # ── Pruning ──────────────────────────────────────────────────────────────────
 
 
@@ -104,7 +199,9 @@ async def test_chunks_a_changed_file_no_longer_produces_are_pruned(
     _store(project, _chunk(start=1), _chunk(start=40), _chunk(start=90))
 
     await _run(
-        ChunkUpload(project_id=project, chunks=[_chunk(start=1, file_hash="h2")], changed_paths=["a.py"])  # noqa: E501
+        ChunkUpload(
+            project_id=project, chunks=[_chunk(start=1, file_hash="h2")], changed_paths=["a.py"]
+        )
     )
 
     assert stored_manifest(project)["a.py"].ids == ("a.py:1",)
@@ -147,45 +244,6 @@ async def test_running_the_same_job_twice_is_harmless(project, embedded, isolate
 
 
 # ── Failure ──────────────────────────────────────────────────────────────────
-
-
-async def test_batches_already_stored_survive_a_later_failure(
-    project, isolated_chroma, monkeypatch
-):
-    async def one_batch_then_boom(texts, **kwargs):
-        yield EmbeddedBatch(indices=[0], vectors=[VECTOR])
-        raise RuntimeError("provider exploded")
-
-    monkeypatch.setattr(indexer, "embed_batches", one_batch_then_boom)
-    events = await _run(
-        ChunkUpload(
-            project_id=project,
-            chunks=[_chunk(start=1), _chunk(start=40)],
-            changed_paths=["a.py"],
-        )
-    )
-
-    assert events[-1].step == "error"
-    assert "provider exploded" in events[-1].message
-    assert collection_size(project) == 1
-
-
-async def test_a_failed_job_prunes_nothing(project, isolated_chroma, monkeypatch):
-    """Pruning comes after storing, so a failure leaves old vectors, not a hole."""
-    async def boom(texts, **kwargs):
-        raise RuntimeError("provider exploded")
-        yield  # pragma: no cover — makes this an async generator
-
-    monkeypatch.setattr(indexer, "embed_batches", boom)
-    _store(project, _chunk(path="gone.py"))
-
-    await _run(
-        ChunkUpload(
-            project_id=project, chunks=[_chunk()], changed_paths=["a.py"], removed_paths=["gone.py"]
-        )
-    )
-
-    assert "gone.py" in stored_manifest(project)
 
 
 async def test_an_expected_failure_is_reported_without_a_traceback(
@@ -242,3 +300,28 @@ async def test_a_skipped_chunk_is_reported_not_hidden(project, isolated_chroma, 
 
     assert events[-1].skipped == 1
     assert events[-1].skipped_files == ["huge.py"]
+
+
+async def test_a_chunk_that_could_not_be_embedded_loses_its_old_version(
+    project, isolated_chroma, monkeypatch
+):
+    """Its old vector describes text the file no longer has."""
+    async def first_refused(texts, **kwargs):
+        yield EmbeddedBatch(
+            indices=[1], vectors=[VECTOR], failures={0: RuntimeError("input too long")}
+        )
+
+    monkeypatch.setattr(indexer, "embed_batches", first_refused)
+    _store(project, _chunk(start=1, file_hash="old"), _chunk(start=40, file_hash="old"))
+
+    await _run(
+        ChunkUpload(
+            project_id=project,
+            chunks=[_chunk(start=1, file_hash="new"), _chunk(start=40, file_hash="new")],
+            changed_paths=["a.py"],
+        )
+    )
+
+    stored = stored_manifest(project)["a.py"]
+    assert stored.ids == ("a.py:40",)
+    assert stored.file_hash == "new"

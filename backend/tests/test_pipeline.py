@@ -12,6 +12,7 @@ from conftest import FakeGateway, make_response
 from fastapi.testclient import TestClient
 
 import agents.session as session
+import core.index.adapters.chroma as chroma
 import core.index.indexer as indexer
 import core.index.semantic_index as semantic_index
 import core.workspace.project_index as project_index
@@ -137,11 +138,10 @@ def stub_embedding(monkeypatch):
 
     def fake_store(path, chunks, embeddings):
         stored["path"] = path
-        # Called once per batch now, so accumulate rather than overwrite.
         stored.setdefault("chunks", []).extend(chunks)
 
     monkeypatch.setattr(indexer, "embed_batches", fake_batches)
-    monkeypatch.setattr(indexer, "store_chunks", fake_store)
+    monkeypatch.setattr(chroma, "store_chunks", fake_store)
     return stored
 
 

@@ -64,6 +64,7 @@ packages = [
     "contracts",
     "core",
     "core.index",
+    "core.index.adapters",
     "core.local",
     "core.models",
     "core.remote",
