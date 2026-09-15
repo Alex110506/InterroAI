@@ -103,17 +103,35 @@ llm_retry = retry(
 # still produces a fresh client.
 _clients: dict[tuple[str, float | None, float | None], AsyncOpenAI] = {}
 
+#: A key set by the process itself. The desktop runtime leaves this unset and
+#: reads the user's OS keychain; the cloud API and worker have no keychain and
+#: set the platform key from their settings.
+_configured_key: str | None = None
+
+
+def use_api_key(key: str | None) -> None:
+    """
+    Use *key* for every client from now on, instead of the OS keychain.
+
+    For the cloud processes, whose key comes from settings — in Azure, from Key
+    Vault through an environment variable. `None` goes back to the keychain.
+    """
+    global _configured_key
+    _configured_key = key or None
+    _clients.clear()
+
 
 def get_client(timeout: httpx.Timeout) -> AsyncOpenAI:
     """
-    Return a configured client for the stored API key.
+    Return a configured client for the configured key, or else the stored one.
 
     Raises:
-        MissingAPIKeyError: if no key is present in the OS keychain. This is an
-            expected condition, not a bug — callers should surface it to the
-            user verbatim rather than treating it as a generic failure.
+        MissingAPIKeyError: if no key is configured or present in the OS
+            keychain. This is an expected condition, not a bug — callers should
+            surface it to the user verbatim rather than treating it as a
+            generic failure.
     """
-    key = retrieve_openai_key()
+    key = _configured_key or retrieve_openai_key()
     if not key:
         raise MissingAPIKeyError()
 

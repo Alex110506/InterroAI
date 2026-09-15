@@ -56,18 +56,18 @@ def _violations(relative: str, forbidden: tuple[str, ...]) -> list[str]:
 
 
 #: What the ports exist to hide — the model SDK, the embedding client, the
-#: vector store and the machinery behind the index — plus the two concrete
-#: implementations, which only `core/providers.py` may name.
+#: vector store and the machinery behind the index — plus the concrete
+#: implementations, local and remote, which only `core/providers.py` may name.
 _BEHIND_THE_PORTS = (
     "openai",
     "chromadb",
     "core.models.llm",
     "core.models.gateway.OpenAIGateway",
+    "core.index.adapters",
     "core.index.embeddings",
     "core.index.indexer",
-    "core.index.job_queue",
-    "core.index.vector_store",
     "core.index.semantic_index.LocalSemanticIndex",
+    "core.remote",
 )
 
 _FEATURES = ("core.workspace", "core.index", "agents", "api")
@@ -78,7 +78,7 @@ def test_the_runtime_reaches_models_and_the_index_only_through_ports(module):
     assert _violations(module, _BEHIND_THE_PORTS) == []
 
 
-@pytest.mark.parametrize("module", _modules("core/index"))
+@pytest.mark.parametrize("module", _modules("core/index", "core/index/adapters"))
 def test_the_index_service_never_reaches_into_the_workspace(module):
     """It moves to the cloud, where there is no workspace to reach into."""
     assert _violations(module, ("core.workspace", "agents", "api")) == []
@@ -94,9 +94,45 @@ def test_plumbing_never_depends_on_a_feature(module):
     assert _violations(module, _FEATURES) == []
 
 
+@pytest.mark.parametrize("module", _modules("core/remote"))
+def test_the_cloud_clients_stay_clients(module):
+    """They are the ports' other implementations: features call them, never the reverse."""
+    forbidden = (
+        "core.workspace",
+        "agents",
+        "api",
+        "chromadb",
+        "core.models.llm",
+        "core.index.adapters",
+        "core.index.embeddings",
+        "core.index.indexer",
+    )
+    assert _violations(module, forbidden) == []
+
+
 @pytest.mark.parametrize("module", _modules("contracts"))
 def test_the_contracts_depend_on_nothing_else_in_the_backend(module):
-    assert _violations(module, ("core", "agents", "api", "config", "main")) == []
+    assert _violations(module, ("core", "agents", "api", "cloud", "config", "main")) == []
+
+
+@pytest.mark.parametrize(
+    "module",
+    _modules(
+        "agents", "api", "core", "core/models", "core/workspace",
+        "core/index", "core/index/adapters", "core/local", "core/remote",
+    ),
+)
+def test_the_runtime_never_imports_the_cloud_side(module):
+    """The runtime ships to users' machines; the cloud code and its SDKs do not."""
+    assert _violations(module, ("cloud",)) == []
+
+
+@pytest.mark.parametrize(
+    "module", _modules("cloud", "cloud/adapters", "cloud/api", "cloud/db", "cloud/worker")
+)
+def test_the_cloud_side_never_imports_the_runtime(module):
+    """There is no workspace, agent or local transport on a server to reach for."""
+    assert _violations(module, ("agents", "api", "core.workspace", "core.remote")) == []
 
 
 def test_the_guard_can_see_imports_at_all():
@@ -104,5 +140,8 @@ def test_the_guard_can_see_imports_at_all():
     assert "core.index.semantic_index" in _imports("core/workspace/project_index.py")
     assert "core.providers" in _imports("agents/coder.py")
 
-    folders = ("agents", "api", "contracts", "core/workspace", "core/index", "core/models", "core/local")  # noqa: E501
+    folders = (
+        "agents", "api", "contracts", "core/workspace",
+        "core/index", "core/index/adapters", "core/models", "core/local",
+    )
     assert all(_modules(folder) for folder in folders)

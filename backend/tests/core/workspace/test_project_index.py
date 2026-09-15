@@ -16,9 +16,9 @@ import pytest
 
 import core.index.indexer as indexer
 import core.workspace.project_index as project_index
+from core.index.adapters.chroma import collection_size, search_chunks, stored_manifest
 from core.index.embeddings import EmbeddedBatch
 from core.index.semantic_index import LocalSemanticIndex
-from core.index.vector_store import collection_size, search_chunks, stored_manifest
 
 
 @pytest.fixture
@@ -232,13 +232,13 @@ async def test_force_discards_what_the_store_held(project, embedded, isolated_ch
 # ── Partial failure ──────────────────────────────────────────────────────────
 
 
-async def test_batches_already_embedded_survive_a_later_failure(
+async def test_a_failed_run_changes_nothing_in_the_index(
     project, embedded, isolated_chroma, monkeypatch
 ):
     """
-    The other half of the resilience fix: vectors are stored as each batch
-    lands, so a failure late in a run cannot discard what earlier batches
-    already paid for.
+    The index is written once, after every chunk is embedded, so a provider
+    failure part-way through leaves it exactly as it was. What was already paid
+    for is banked in the embedding cache instead (see `core/index/indexer.py`).
     """
     async def one_good_batch_then_boom(texts, **kwargs):
         yield EmbeddedBatch(indices=[0], vectors=[[0.1, 0.2, 0.3, 0.4]])
@@ -248,7 +248,7 @@ async def test_batches_already_embedded_survive_a_later_failure(
     summary = await _index(project)
 
     assert summary["step"] == "error"
-    assert collection_size(str(project)) == 1, "the first batch must have been kept"
+    assert collection_size(str(project)) == 0, "a failed job must not half-write the index"
 
 
 async def test_a_failed_run_is_finished_by_the_next_one(

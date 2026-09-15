@@ -1,0 +1,133 @@
+.screen {
+  position: relative;
+  height: 100vh;
+  display: grid;
+  place-items: center;
+  background: var(--bg);
+}
+
+/* macOS: the window can still be dragged by its top edge */
+.drag {
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 52px;
+  -webkit-app-region: drag;
+}
+
+.card {
+  width: 380px;
+  max-width: calc(100vw - 40px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 36px 32px 28px;
+  text-align: center;
+  background: rgba(22, 23, 36, 0.96);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow:
+    0 24px 60px rgba(0, 0, 0, 0.5),
+    0 0 0 0.5px rgba(255, 255, 255, 0.06) inset;
+  animation: rise 0.2s cubic-bezier(0.34, 1.2, 0.64, 1);
+}
+
+@keyframes rise {
+  from { transform: translateY(10px); opacity: 0 }
+  to   { transform: translateY(0); opacity: 1 }
+}
+
+.logo {
+  width: 52px;
+  height: 52px;
+  margin-bottom: 4px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-lg);
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+
+.title {
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+
+.desc {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-2);
+}
+
+.primary {
+  width: 100%;
+  margin-top: 6px;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 18px;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: #fff;
+  font-size: 13.5px;
+  font-weight: 500;
+  transition: opacity 0.13s, transform 0.1s;
+}
+
+.primary:hover { opacity: 0.88 }
+.primary:active { transform: scale(0.98) }
+
+.primary:disabled {
+  opacity: 0.6;
+  cursor: default;
+  transform: none;
+}
+
+.secondary {
+  width: 100%;
+  justify-content: center;
+  padding: 8px 16px;
+  border-radius: var(--radius-sm);
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 500;
+  transition: background 0.13s, color 0.13s;
+}
+
+.secondary:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.error {
+  width: 100%;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.25);
+  color: #f87171;
+  font-size: 12.5px;
+  line-height: 1.5;
+  text-align: left;
+}
+
+.error svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.hint {
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+.spin {
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg) }
+}

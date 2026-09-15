@@ -15,7 +15,7 @@ Losing either costs time, never correctness. That is precisely what makes them
 safe to keep in evictable storage, and it is why the file→hash manifest that
 drives incremental indexing deliberately does **not** live here — that has to
 stay consistent with the vectors it describes, so it lives in the vector
-store's own metadata (see `core/index/vector_store.py::stored_manifest`).
+store's own metadata (see `core/index/adapters/chroma.py::stored_manifest`).
 
 If no Redis is reachable, every read misses and every write is dropped, so the
 caller simply recomputes. A desktop app must not stop working because a
@@ -142,14 +142,19 @@ async def set_repo_map(project_path: str, fingerprint: str, repo_map: str) -> No
 # ── Embedding vectors ────────────────────────────────────────────────────────
 
 
-def vector_key(text: str, model: str) -> str:
+def vector_key_for(model: str, digest: str) -> str:
     """
-    Content-addressed key for one chunk's embedding.
+    The key for one embedding, given its text's digest.
 
     The model is part of the key: two models produce incompatible vectors for
     identical text, and silently mixing them would corrupt every search.
     """
-    return f"{_PREFIX}:vec:{model}:{_digest(text)}"
+    return f"{_PREFIX}:vec:{model}:{digest}"
+
+
+def vector_key(text: str, model: str) -> str:
+    """Content-addressed key for one chunk's embedding."""
+    return vector_key_for(model, _digest(text))
 
 
 def _encode(vector: list[float]) -> bytes:

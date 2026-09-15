@@ -3,29 +3,61 @@ import Sidebar from './components/Sidebar'
 import ChatPanel from './components/ChatPanel'
 import ThoughtPanel from './components/ThoughtPanel'
 import SettingsModal from './components/SettingsModal'
+import LoginScreen from './components/LoginScreen'
 
 import { api } from './lib/api'
+
+function toSession(data) {
+  return {
+    mode: data.mode,
+    signedIn: data.signed_in,
+    login: data.login,
+    avatarUrl: data.avatar_url,
+  }
+}
 
 export default function App() {
   const [projects, setProjects] = useState([])
   const [activeId, setActiveId] = useState(null)
   const [thoughtOpen, setThoughtOpen] = useState(true)
   const [thoughtEvents, setThoughtEvents] = useState([])
-
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [settings, setSettings] = useState({ name: '', hasApiKey: false })
+  // null until the runtime has said which mode it is in.
+  const [session, setSession] = useState(null)
 
   const onThoughtEvent = useCallback((event) => {
     setThoughtEvents((prev) => [...prev, event])
   }, [])
 
   const clearThought = useCallback(() => setThoughtEvents([]), [])
-  const [settingsOpen, setSettingsOpen] = useState(false)
-  const [settings, setSettings] = useState({ name: '', hasApiKey: false })
 
   useEffect(() => {
+    api.getSession()
+      .then((data) => setSession(toSession(data)))
+      .catch(() => {})
     api.getSettings()
       .then((data) => setSettings({ name: data.name, hasApiKey: data.has_api_key }))
       .catch(() => {})
   }, [])
+
+  // The cloud ended the session (expired, revoked, or taken off the allowlist):
+  // back to the sign-in screen. Open projects stay as they are.
+  const handleAuthLost = useCallback(() => {
+    setSettingsOpen(false)
+    setSession((prev) =>
+      prev?.mode === 'cloud' ? { ...prev, signedIn: false, login: null, avatarUrl: null } : prev
+    )
+  }, [])
+
+  const handleSignOut = async () => {
+    try {
+      await api.signOut()
+    } catch {
+      // The runtime forgets the session locally even when the cloud is unreachable.
+    }
+    handleAuthLost()
+  }
 
   const handleNewProject = async () => {
     const folderPath = await window.electronAPI.selectFolder()
@@ -44,6 +76,7 @@ export default function App() {
       embedStatus: 'idle',   // 'idle' | 'running' | 'done' | 'error'
       embedSteps: null,      // { A, B, C, D } each 'idle'|'running'|'done'
       embedProgress: {},     // { files, chunks, embedded, total, stored }
+      embedError: null,
     }])
     setActiveId(id)
 
@@ -70,6 +103,7 @@ export default function App() {
         embedStatus: 'running',
         embedSteps: { A: 'idle', B: 'idle', C: 'idle', D: 'idle' },
         embedProgress: {},
+        embedError: null,
       } : p)
     )
 
@@ -100,9 +134,10 @@ export default function App() {
       setProjects((prev) =>
         prev.map((p) => p.id === id ? { ...p, embedStatus: 'done' } : p)
       )
-    } catch {
+    } catch (err) {
+      if (err.code === 'not_signed_in') handleAuthLost()
       setProjects((prev) =>
-        prev.map((p) => p.id === id ? { ...p, embedStatus: 'error' } : p)
+        prev.map((p) => p.id === id ? { ...p, embedStatus: 'error', embedError: err.message } : p)
       )
     }
   }
@@ -117,6 +152,10 @@ export default function App() {
     setSettingsOpen(false)
   }
 
+  if (session?.mode === 'cloud' && !session.signedIn) {
+    return <LoginScreen onSignedIn={(data) => setSession(toSession(data))} />
+  }
+
   return (
     <div
       className="layout"
@@ -125,6 +164,7 @@ export default function App() {
       <Sidebar
         projects={projects}
         activeId={activeId}
+        account={session?.mode === 'cloud' ? session : null}
         onSelect={setActiveId}
         onNewProject={handleNewProject}
         onDeleteProject={handleDeleteProject}
@@ -137,17 +177,17 @@ export default function App() {
         onToggleThought={() => setThoughtOpen((o) => !o)}
         onThoughtEvent={onThoughtEvent}
         clearThought={clearThought}
-
+        onAuthLost={handleAuthLost}
       />
       <ThoughtPanel isOpen={thoughtOpen} events={thoughtEvents} />
-
-
 
       {settingsOpen && (
         <SettingsModal
           settings={settings}
+          session={session}
           onSave={handleSettingsSaved}
           onClose={() => setSettingsOpen(false)}
+          onSignOut={handleSignOut}
         />
       )}
     </div>

@@ -282,10 +282,15 @@ class ChatSession:
             async for event in stream:
                 yield event
         except InterroAIError as exc:
-            # Expected and already phrased for a human (missing key, bad model).
+            # Expected and already phrased for a human (missing key, bad model,
+            # signed out of the cloud). A `code`, when there is one, lets the app
+            # act on it rather than only show it.
             logger.info("Chat session ended: %s", exc)
             self.finished = True
-            yield {"type": "error", "message": str(exc)}
+            event = {"type": "error", "message": str(exc)}
+            if exc.code:
+                event["code"] = exc.code
+            yield event
         except Exception as exc:  # noqa: BLE001
             # Unexpected: keep the traceback. The caller still gets the message,
             # since this is a local single-user tool and the alternative is a

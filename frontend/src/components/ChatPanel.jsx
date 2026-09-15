@@ -26,7 +26,7 @@ function toHistory(messages) {
 /* ─── Embed step indicators ─────────────────────────────────────────── */
 const STEP_LABELS = { A: 'Scanning files', B: 'Chunking code', C: 'Generating embeddings', D: 'Storing vectors' }
 
-function EmbedProgress({ embedStatus, embedSteps, embedProgress }) {
+function EmbedProgress({ embedStatus, embedSteps, embedProgress, embedError }) {
   if (!embedStatus || embedStatus === 'idle') return null
   const steps = embedSteps ?? {}
   const prog = embedProgress ?? {}
@@ -43,7 +43,7 @@ function EmbedProgress({ embedStatus, embedSteps, embedProgress }) {
     return (
       <div className={s.embedErrorChip}>
         <AlertTriangle size={12} strokeWidth={2} />
-        Embedding failed — check your API key in Settings
+        {embedError || 'Embedding failed — check your API key in Settings'}
       </div>
     )
   }
@@ -72,7 +72,7 @@ function EmbedProgress({ embedStatus, embedSteps, embedProgress }) {
 
 /* ─── Project empty / indexing state ────────────────────────────────── */
 function ProjectEmptyState({ project }) {
-  const { indexStatus, index, folderName, embedStatus, embedSteps, embedProgress } = project
+  const { indexStatus, index, folderName, embedStatus, embedSteps, embedProgress, embedError } = project
 
   if (indexStatus === 'indexing') {
     return (
@@ -138,7 +138,7 @@ function ProjectEmptyState({ project }) {
         </div>
       )}
 
-      <EmbedProgress embedStatus={embedStatus} embedSteps={embedSteps} embedProgress={embedProgress} />
+      <EmbedProgress embedStatus={embedStatus} embedSteps={embedSteps} embedProgress={embedProgress} embedError={embedError} />
     </div>
   )
 }
@@ -171,7 +171,7 @@ const MODELS = [
 const DEFAULT_MODEL = 'gpt-5.4-high-effort'
 
 /* ─── Main ChatPanel ─────────────────────────────────────────────────── */
-export default function ChatPanel({ activeId, projects, thoughtOpen, onToggleThought, onThoughtEvent, clearThought }) {
+export default function ChatPanel({ activeId, projects, thoughtOpen, onToggleThought, onThoughtEvent, clearThought, onAuthLost }) {
   const [input, setInput] = useState('')
   const [selectedModel, setSelectedModel] = useState(DEFAULT_MODEL)
   const [showModelDropdown, setShowModelDropdown] = useState(false)
@@ -256,11 +256,13 @@ export default function ChatPanel({ activeId, projects, thoughtOpen, onToggleTho
       addMessage({ role: 'agent', subtype: 'error', content: event.message })
       wsRef.current?.close()
       wsRef.current = null
+      // The cloud session ended: the app goes back to its sign-in screen.
+      if (event.code === 'not_signed_in') onAuthLost?.()
     }
-  }, [addMessage, onThoughtEvent])
+  }, [addMessage, onThoughtEvent, onAuthLost])
 
   /* ── Send handler ── */
-  const send = () => {
+  const send = async () => {
     const text = input.trim()
     if (!text || !activeId || isLoading || project?.indexStatus !== 'done') return
 
@@ -275,7 +277,14 @@ export default function ChatPanel({ activeId, projects, thoughtOpen, onToggleTho
     setIsLoading(true)
     clearThought?.()
 
-    const ws = api.openChatSocket()
+    let ws
+    try {
+      ws = await api.openChatSocket()
+    } catch (err) {
+      setIsLoading(false)
+      addMessage({ role: 'agent', subtype: 'error', content: err.message })
+      return
+    }
     wsRef.current = ws
 
     ws.onopen = () => {

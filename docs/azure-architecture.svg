@@ -16,7 +16,7 @@
     <!-- GitHub OAuth -->
     <rect x="60" y="20" width="180" height="56" rx="8" fill="#fcfcfb" stroke="#e5e5e5" stroke-width="1"/>
     <text x="150" y="38" text-anchor="middle" dominant-baseline="central" style="fill:#111; font-family: system-ui, sans-serif; font-size: 14px; font-weight: 500;">GitHub OAuth App</text>
-    <text x="150" y="58" text-anchor="middle" dominant-baseline="central" style="fill:#52514e; font-family: system-ui, sans-serif; font-size: 12px;">Identity only · read:user</text>
+    <text x="150" y="58" text-anchor="middle" dominant-baseline="central" style="fill:#52514e; font-family: system-ui, sans-serif; font-size: 12px;">Identity only · no scopes</text>
 
     <!-- OpenAI API -->
     <rect x="330" y="20" width="180" height="56" rx="8" fill="#fcfcfb" stroke="#e5e5e5" stroke-width="1"/>
@@ -53,7 +53,7 @@
 
     <rect x="55" y="215" width="220" height="50" rx="8" fill="#eeedfe" stroke="#534ab7" stroke-width="1"/>
     <text x="165" y="232" text-anchor="middle" dominant-baseline="central" style="fill:#3c3489; font-family: system-ui, sans-serif; font-size: 14px; font-weight: 500;">Auth &amp; Sessions</text>
-    <text x="165" y="250" text-anchor="middle" dominant-baseline="central" style="fill:#534ab7; font-family: system-ui, sans-serif; font-size: 12px;">GitHub OAuth → JWT</text>
+    <text x="165" y="250" text-anchor="middle" dominant-baseline="central" style="fill:#534ab7; font-family: system-ui, sans-serif; font-size: 12px;">GitHub OAuth · PKCE → JWT</text>
 
     <rect x="55" y="275" width="220" height="50" rx="8" fill="#eeedfe" stroke="#534ab7" stroke-width="1"/>
     <text x="165" y="292" text-anchor="middle" dominant-baseline="central" style="fill:#3c3489; font-family: system-ui, sans-serif; font-size: 14px; font-weight: 500;">Projects &amp; Sync</text>
@@ -114,7 +114,7 @@
     <!-- Blob Storage -->
     <rect x="550" y="495" width="250" height="90" rx="8" fill="#f0f9ff" stroke="#0ea5e9" stroke-width="1"/>
     <text x="675" y="517" text-anchor="middle" dominant-baseline="central" style="fill:#0369a1; font-family: system-ui, sans-serif; font-size: 14px; font-weight: 500;">Blob Storage</text>
-    <text x="675" y="541" text-anchor="middle" dominant-baseline="central" style="fill:#0284c7; font-family: system-ui, sans-serif; font-size: 12px;">Chunk uploads (JSONL)</text>
+    <text x="675" y="541" text-anchor="middle" dominant-baseline="central" style="fill:#0284c7; font-family: system-ui, sans-serif; font-size: 12px;">Chunk uploads (JSON)</text>
     <text x="675" y="561" text-anchor="middle" dominant-baseline="central" style="fill:#0284c7; font-family: system-ui, sans-serif; font-size: 12px;">Deleted after embed · 1-day TTL</text>
 
     <!-- Platform services -->
@@ -150,7 +150,7 @@
   <g>
     <!-- Local Agent Runtime -->
     <rect x="40" y="765" width="480" height="120" rx="12" fill="#fafafa" stroke="#d4d4d8" stroke-width="1"/>
-    <text x="280" y="787" text-anchor="middle" style="fill:#111; font-family: system-ui, sans-serif; font-size: 14px; font-weight: 500;">Local Agent Runtime · Python</text>
+    <text x="280" y="787" text-anchor="middle" style="fill:#111; font-family: system-ui, sans-serif; font-size: 14px; font-weight: 500;">Local Agent Runtime · Python · session in OS keychain</text>
 
     <rect x="55" y="805" width="140" height="60" rx="8" fill="#eff6ff" stroke="#3b82f6" stroke-width="1"/>
     <text x="125" y="825" text-anchor="middle" dominant-baseline="central" style="fill:#1d4ed8; font-family: system-ui, sans-serif; font-size: 14px; font-weight: 500;">Agent Loop</text>
@@ -168,13 +168,13 @@
     <rect x="550" y="765" width="250" height="120" rx="12" fill="#fff7ed" stroke="#ea580c" stroke-width="1"/>
     <text x="675" y="797" text-anchor="middle" dominant-baseline="central" style="fill:#9a3412; font-family: system-ui, sans-serif; font-size: 14px; font-weight: 500;">Electron App</text>
     <text x="675" y="822" text-anchor="middle" dominant-baseline="central" style="fill:#c2410c; font-family: system-ui, sans-serif; font-size: 12px;">React UI · diff review</text>
-    <text x="675" y="842" text-anchor="middle" dominant-baseline="central" style="fill:#c2410c; font-family: system-ui, sans-serif; font-size: 12px;">GitHub login in system browser</text>
-    <text x="675" y="862" text-anchor="middle" dominant-baseline="central" style="fill:#c2410c; font-family: system-ui, sans-serif; font-size: 12px;">JWT in safeStorage</text>
+    <text x="675" y="842" text-anchor="middle" dominant-baseline="central" style="fill:#c2410c; font-family: system-ui, sans-serif; font-size: 12px;">GitHub sign-in · PKCE loopback</text>
+    <text x="675" y="862" text-anchor="middle" dominant-baseline="central" style="fill:#c2410c; font-family: system-ui, sans-serif; font-size: 12px;">Starts runtime · launch token</text>
   </g>
 
   <!-- Connection: Electron <-> Runtime -->
   <line x1="547" y1="825" x2="523" y2="825" marker-start="url(#arrow)" marker-end="url(#arrow)" stroke="#898781" stroke-width="1.5"/>
-  <text x="535" y="815" text-anchor="middle" style="fill:#52514e; font-family: system-ui, sans-serif; font-size: 10px;">IPC</text>
+  <text x="535" y="815" text-anchor="middle" style="fill:#52514e; font-family: system-ui, sans-serif; font-size: 10px;">HTTP</text>
 
   <!-- ================= FOOTNOTE ================= -->
   <text x="420" y="932" text-anchor="middle" style="fill:#52514e; font-family: system-ui, sans-serif; font-size: 12px;">Search returns path + line range + file_hash; the runtime reads the code from local disk.</text>

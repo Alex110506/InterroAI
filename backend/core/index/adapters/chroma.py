@@ -1,5 +1,5 @@
 """
-ChromaDB persistent vector store (Section 3D of architecture spec).
+The local `ChunkStore`: ChromaDB, persistent on disk (Section 3D of architecture spec).
 
 Each project gets its own collection, keyed by a sanitised form of its
 absolute path. Chunks are upserted so re-indexing a project is idempotent.
@@ -26,12 +26,15 @@ liability with nothing to show for it.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
-from dataclasses import dataclass
 from pathlib import Path
 
 import chromadb
+
+from contracts.indexing import SearchHit
+from core.index.ports import IndexedChunk, StoredFile, chunk_id
 
 logger = logging.getLogger(__name__)
 
@@ -64,25 +67,6 @@ def _client() -> chromadb.ClientAPI:
     return chromadb.PersistentClient(path=str(_STORE_DIR))
 
 
-def chunk_id(chunk: dict) -> str:
-    """
-    The stable id for a chunk: its file and the line it starts at.
-
-    Deterministic on purpose — re-indexing an unchanged file overwrites its own
-    chunks instead of accumulating duplicates. The flip side is that ids of
-    chunks a file no longer produces have to be deleted explicitly.
-    """
-    return f"{chunk['file_path']}:{chunk['start_line']}"
-
-
-@dataclass(frozen=True)
-class StoredFile:
-    """What the store currently holds for one file."""
-
-    file_hash: str
-    ids: tuple[str, ...]
-
-
 def store_chunks(
     project_path: str,
     chunks: list[dict],
@@ -102,7 +86,7 @@ def store_chunks(
         metadata={"hnsw:space": "cosine"},
     )
     col.upsert(
-        ids=[chunk_id(c) for c in chunks],
+        ids=[chunk_id(c["file_path"], c["start_line"]) for c in chunks],
         embeddings=embeddings,
         metadatas=[
             {
@@ -240,3 +224,51 @@ def search_chunks(
         }
         for meta, distance in zip(results["metadatas"][0], results["distances"][0], strict=True)
     ]
+
+
+class ChromaChunkStore:
+    """
+    `ChunkStore` over the functions above, run off the event loop.
+
+    Chroma has no transactions, so `apply` is ordered to fail safe rather than
+    being atomic: reset, then upsert, then delete. A crash between the upsert
+    and the delete leaves stale chunks, which the next sync prunes — it never
+    leaves one missing.
+    """
+
+    async def manifest(self, project_id: str) -> dict[str, StoredFile]:
+        return await asyncio.to_thread(stored_manifest, project_id)
+
+    async def apply(
+        self,
+        project_id: str,
+        *,
+        upserts: list[IndexedChunk],
+        delete: list[str],
+        reset: bool = False,
+    ) -> int:
+        def write() -> int:
+            if reset:
+                reset_collection(project_id)
+            if upserts:
+                store_chunks(
+                    project_id,
+                    [_metadata_row(chunk) for chunk in upserts],
+                    [chunk.vector for chunk in upserts],
+                )
+            return delete_ids(project_id, delete)
+
+        return await asyncio.to_thread(write)
+
+    async def search(self, project_id: str, vector: list[float], n: int) -> list[SearchHit]:
+        rows = await asyncio.to_thread(search_chunks, project_id, vector, n)
+        return [SearchHit(**row) for row in rows]
+
+
+def _metadata_row(chunk: IndexedChunk) -> dict:
+    return {
+        "file_path": chunk.file_path,
+        "start_line": chunk.start_line,
+        "end_line": chunk.end_line,
+        "file_hash": chunk.file_hash,
+    }

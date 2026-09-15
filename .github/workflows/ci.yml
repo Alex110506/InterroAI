@@ -10,15 +10,14 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-defaults:
-  run:
-    working-directory: backend
-
 jobs:
-  ci:
-    name: Lint & test
+  backend:
+    name: Backend · lint & unit tests
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: backend
     steps:
       - name: Check out the repository
         uses: actions/checkout@v7
@@ -34,10 +33,9 @@ jobs:
           enable-cache: true
 
       # requirements.lock is resolved for the maintainer's own platform
-      # (uv pip compile is single-platform, not universal), so it cannot be
-      # synced on this Linux runner — install from pyproject.toml's
-      # dependency ranges instead, same as a fresh contributor without a
-      # matching lockfile would.
+      # (uv pip compile is single-platform unless asked otherwise), so it cannot
+      # be synced on this Linux runner — install from pyproject.toml's
+      # dependency ranges instead, same as a fresh contributor would.
       - name: Install dependencies
         run: uv pip install -e ".[dev]" --system
 
@@ -46,3 +44,171 @@ jobs:
 
       - name: Run tests (pytest)
         run: pytest
+
+  integration:
+    name: Backend · integration tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      # This job starts the stack on purpose, so an unreachable service must fail
+      # the run instead of quietly skipping every test that needs it.
+      INTERROAI_REQUIRE_STACK: "1"
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.1.0
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv pip install -e ".[dev]" --system
+
+      # Throwaway values for containers that live as long as this job. The blob
+      # account key is Azurite's published development key, not a secret.
+      - name: Write the stack's .env
+        working-directory: .
+        run: |
+          cat > .env <<'EOF'
+          POSTGRES_USER=postgres
+          POSTGRES_PASSWORD=ci-postgres-password
+          POSTGRES_DB=interroai
+          INTERROAI_APP_DB_PASSWORD=ci-app-password
+          MSSQL_SA_PASSWORD=Ci-Only-Passw0rd!
+          INTERROAI_DATABASE_URL=postgresql+asyncpg://interroai_app:ci-app-password@localhost:5432/interroai
+          INTERROAI_MIGRATIONS_DATABASE_URL=postgresql+asyncpg://postgres:ci-postgres-password@localhost:5432/interroai
+          INTERROAI_BLOB_CONNECTION_STRING=DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;
+          EOF
+
+      - name: Start Postgres and Azurite
+        working-directory: .
+        run: docker compose up --detach --wait postgres azurite
+
+      # pg_isready can report ready while the init script is still creating the
+      # app role and the test database, so wait for exactly what the tests use.
+      - name: Wait until Postgres accepts the app role
+        run: |
+          python - <<'EOF'
+          import asyncio
+
+          import asyncpg
+
+          URL = "postgresql://interroai_app:ci-app-password@localhost:5432/interroai_test"
+
+          async def main():
+              for _ in range(60):
+                  try:
+                      connection = await asyncpg.connect(URL)
+                  except (OSError, asyncpg.PostgresError):
+                      await asyncio.sleep(2)
+                  else:
+                      await connection.close()
+                      return
+              raise SystemExit("Postgres did not become ready")
+
+          asyncio.run(main())
+          EOF
+
+      # The Service Bus emulator needs SQL Server, and Microsoft licenses both on
+      # terms someone has to accept. That is the repository owner's decision,
+      # made by setting the repository variable ACCEPT_SERVICEBUS_EMULATOR_EULA
+      # to Y. Until then the Service Bus tests skip.
+      - name: Start the Service Bus emulator
+        if: vars.ACCEPT_SERVICEBUS_EMULATOR_EULA == 'Y'
+        working-directory: .
+        env:
+          ACCEPT_EULA: "Y"
+        run: |
+          echo 'INTERROAI_SERVICEBUS_CONNECTION_STRING=Endpoint=sb://localhost;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=SAS_KEY_VALUE;UseDevelopmentEmulator=true;' >> .env
+          docker compose up --detach servicebus
+          for attempt in $(seq 1 60); do
+            if curl --silent http://localhost:5300/health | grep -q '"healthy"'; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "The Service Bus emulator did not become healthy" >&2
+          exit 1
+
+      - name: Run integration tests
+        run: pytest -m integration
+
+      - name: Show the stack's logs
+        if: failure()
+        working-directory: .
+        run: docker compose logs --tail 200
+
+  frontend:
+    name: Frontend · tests & build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+        env:
+          # Opening a window needs the Electron binary; testing and building do not.
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+
+      - name: Test the main process (node --test)
+        run: npm test
+
+      - name: Build the renderer (vite)
+        run: npm run build
+
+  images:
+    name: Cloud images · build & start
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+
+      - name: Build the API image
+        run: docker build --target api --tag interroai-api:ci backend
+
+      - name: Build the worker image
+        run: docker build --target worker --tag interroai-worker:ci backend
+
+      # Placeholder settings, only so the API can start: nothing connects to
+      # them until a request needs it.
+      - name: The API image starts and answers /health
+        run: |
+          docker run --detach --name api --publish 8080:8080 \
+            --env INTERROAI_DATABASE_URL=postgresql+asyncpg://app:unused@127.0.0.1:1/interroai \
+            --env "INTERROAI_SERVICEBUS_CONNECTION_STRING=Endpoint=sb://127.0.0.1;SharedAccessKeyName=unused;SharedAccessKey=unused;UseDevelopmentEmulator=true;" \
+            --env "INTERROAI_BLOB_CONNECTION_STRING=DefaultEndpointsProtocol=http;AccountName=unused;AccountKey=dW51c2Vk;BlobEndpoint=http://127.0.0.1:1/unused;" \
+            --env INTERROAI_OPENAI_API_KEY=unused \
+            --env INTERROAI_GITHUB_CLIENT_ID=unused \
+            --env INTERROAI_GITHUB_CLIENT_SECRET=unused \
+            --env INTERROAI_JWT_SECRET=ci-only-signing-key-long-enough-for-hs256 \
+            interroai-api:ci
+          if curl --silent --fail --retry 30 --retry-delay 2 --retry-all-errors http://localhost:8080/health; then
+            exit 0
+          fi
+          docker logs api
+          exit 1
+
+      - name: The worker image has everything the worker imports
+        run: docker run --rm interroai-worker:ci python -c "import cloud.worker.main"
