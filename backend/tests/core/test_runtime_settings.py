@@ -26,3 +26,26 @@ def test_an_unknown_mode_is_rejected(monkeypatch):
 def test_the_test_suite_always_runs_the_local_build():
     """`conftest.py` pins it, so a developer's `.env` cannot reroute the suite."""
     assert get_runtime_settings().mode == "local"
+
+
+def test_the_launch_token_comes_from_the_app_and_is_never_printed(monkeypatch):
+    monkeypatch.setenv("INTERROAI_LAUNCH_TOKEN", "t0k3n-from-the-app")
+
+    settings = RuntimeSettings(_env_file=None)
+
+    assert settings.launch_token.get_secret_value() == "t0k3n-from-the-app"
+    assert "t0k3n-from-the-app" not in repr(settings)
+
+
+@pytest.mark.parametrize("value", [None, ""])
+def test_without_a_launch_token_there_is_none(monkeypatch, value):
+    if value is None:
+        monkeypatch.delenv("INTERROAI_LAUNCH_TOKEN", raising=False)
+    else:
+        monkeypatch.setenv("INTERROAI_LAUNCH_TOKEN", value)
+    assert RuntimeSettings(_env_file=None).launch_token is None
+
+
+def test_allowed_origins_are_a_comma_separated_list(monkeypatch):
+    monkeypatch.setenv("INTERROAI_ALLOWED_ORIGINS", "http://localhost:5173, null")
+    assert RuntimeSettings(_env_file=None).origin_list == ["http://localhost:5173", "null"]

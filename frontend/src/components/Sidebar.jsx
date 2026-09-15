@@ -1,7 +1,7 @@
-import { Plus, Clock, Cpu, FolderOpen, Settings, X } from 'lucide-react'
+import { Plus, Clock, Cpu, FolderOpen, Settings, X, CircleUser } from 'lucide-react'
 import s from './Sidebar.module.css'
 
-export default function Sidebar({ projects, activeId, onSelect, onNewProject, onOpenSettings, onDeleteProject }) {
+export default function Sidebar({ projects, activeId, account, onSelect, onNewProject, onOpenSettings, onDeleteProject }) {
   return (
     <aside className={s.sidebar}>
       {/* macOS traffic light spacer */}
@@ -50,6 +50,14 @@ export default function Sidebar({ projects, activeId, onSelect, onNewProject, on
 
       {/* Bottom bar */}
       <div className={s.bottom}>
+        {account?.login && (
+          <div className={s.account} title={`Signed in to InterroAI as @${account.login}`}>
+            {account.avatarUrl
+              ? <img className={s.avatar} src={account.avatarUrl} alt="" />
+              : <CircleUser size={14} strokeWidth={1.8} />}
+            <span className={s.accountName}>@{account.login}</span>
+          </div>
+        )}
         <button className={s.settingsBtn} onClick={onOpenSettings}>
           <Settings size={14} strokeWidth={1.8} />
           <span>Settings</span>
