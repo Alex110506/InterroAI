@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "interroai-backend"
 version = "0.1.0"
-description = "Local runtime for InterroAI — the agent, its tools and the indexing pipeline behind the Electron app"
+description = "InterroAI backend — the local agent runtime, and the cloud API and indexing worker it talks to"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 
@@ -28,11 +28,23 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# What only the cloud processes (cloud/api, cloud/worker) need. The runtime on
+# a user's machine never imports any of it — tests/test_boundaries.py holds that.
+cloud = [
+    "sqlalchemy[asyncio]>=2.0.30",
+    "asyncpg>=0.30.0",
+    "pgvector>=0.3.0",
+    "alembic>=1.13.0",
+    "azure-servicebus>=7.14.0",  # 7.14.0 is the first with emulator support
+    "azure-storage-blob>=12.20.0",
+    "pyjwt>=2.8.0",
+]
 dev = [
     "ruff>=0.5.0",
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
     "pytest-cov>=5.0.0",
+    "interroai-backend[cloud]",
 ]
 
 [project.scripts]
@@ -46,11 +58,15 @@ interroai-backend = "main:run"
 packages = [
     "api",
     "agents",
+    "cloud",
+    "cloud.api",
+    "cloud.worker",
     "contracts",
     "core",
     "core.index",
     "core.local",
     "core.models",
+    "core.remote",
     "core.workspace",
 ]
 py-modules = ["main", "config"]
@@ -80,10 +96,15 @@ asyncio_mode = "auto"
 # The backend is a flat layout imported as `core.*` / `api.*` / `agents.*`,
 # so the package root has to be on sys.path for tests to import it.
 pythonpath = ["."]
-addopts = "-q"
+# Integration tests need the docker compose stack; the default run stays
+# offline. Run them with:  pytest -m integration
+addopts = "-q -m 'not integration'"
+markers = [
+    "integration: needs the local stack from docker-compose.yml (Postgres, Azurite, Service Bus emulator)",
+]
 
 [tool.coverage.run]
-source = ["api", "agents", "contracts", "core"]
+source = ["api", "agents", "cloud", "contracts", "core"]
 omit = ["tests/*"]
 
 [tool.coverage.report]

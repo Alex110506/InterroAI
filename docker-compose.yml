@@ -1,0 +1,75 @@
+# Local stand-ins for the Azure services in docs/azure-architecture.svg.
+#
+#   cp .env.example .env        # then fill it in — see the comments there
+#   docker compose up -d
+#
+# Postgres + pgvector  → Azure Database for PostgreSQL Flexible Server
+# Azurite (blob)       → Azure Blob Storage
+# Service Bus emulator → Azure Service Bus (it needs SQL Server as its own storage)
+#
+# The Cloud API and the worker run on the host during development, so these
+# ports are published on localhost.
+name: interroai
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-interroai}
+      # Read by infra/local/postgres/init/01-roles.sh on the volume's first start.
+      INTERROAI_APP_DB_PASSWORD: ${INTERROAI_APP_DB_PASSWORD:?set INTERROAI_APP_DB_PASSWORD in .env}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./infra/local/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite
+    # --skipApiVersionCheck: the Python SDK can be newer than the emulator's
+    # declared API version, which Azurite would otherwise reject.
+    command: >-
+      azurite-blob --blobHost 0.0.0.0 --blobPort 10000
+      --location /data --loose --skipApiVersionCheck
+    ports:
+      - "10000:10000"
+    volumes:
+      - azurite-data:/data
+
+  mssql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    # There is no arm64 build. On Apple Silicon this needs Docker Desktop's
+    # "Use Rosetta for x86_64/amd64 emulation" setting.
+    platform: linux/amd64
+    environment:
+      ACCEPT_EULA: ${ACCEPT_EULA:-N}
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:?set MSSQL_SA_PASSWORD in .env}
+
+  servicebus:
+    image: mcr.microsoft.com/azure-messaging/servicebus-emulator:latest
+    depends_on:
+      - mssql
+    environment:
+      SQL_SERVER: mssql
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:?set MSSQL_SA_PASSWORD in .env}
+      ACCEPT_EULA: ${ACCEPT_EULA:-N}
+      SQL_WAIT_INTERVAL: ${SQL_WAIT_INTERVAL:-15}
+      EMULATOR_HTTP_PORT: 5300
+    ports:
+      - "5672:5672"   # AMQP
+      - "5300:5300"   # health: http://localhost:5300/health
+    volumes:
+      # Entities are declared here and read at start-up only — restart the
+      # container after editing. Messages do not survive a restart.
+      - ./infra/local/servicebus/config.json:/ServiceBus_Emulator/ConfigFiles/Config.json:ro
+
+volumes:
+  postgres-data:
+  azurite-data:

@@ -19,6 +19,11 @@ _FAKE_HOME = tempfile.mkdtemp(prefix="interroai-test-home-")
 os.environ["HOME"] = _FAKE_HOME
 os.environ["USERPROFILE"] = _FAKE_HOME  # Windows equivalent
 
+# The suite always exercises the local build. An environment variable beats a
+# `.env` file in pydantic-settings, so a developer's `.env` saying
+# INTERROAI_MODE=cloud cannot quietly route tests through the network.
+os.environ["INTERROAI_MODE"] = "local"
+
 # ── Application imports (must come after the HOME redirect) ──────────────────
 from pathlib import Path  # noqa: E402
 from types import SimpleNamespace  # noqa: E402

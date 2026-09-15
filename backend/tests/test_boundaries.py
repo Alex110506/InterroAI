@@ -96,7 +96,25 @@ def test_plumbing_never_depends_on_a_feature(module):
 
 @pytest.mark.parametrize("module", _modules("contracts"))
 def test_the_contracts_depend_on_nothing_else_in_the_backend(module):
-    assert _violations(module, ("core", "agents", "api", "config", "main")) == []
+    assert _violations(module, ("core", "agents", "api", "cloud", "config", "main")) == []
+
+
+@pytest.mark.parametrize(
+    "module",
+    _modules(
+        "agents", "api", "core", "core/models", "core/workspace",
+        "core/index", "core/local", "core/remote",
+    ),
+)
+def test_the_runtime_never_imports_the_cloud_side(module):
+    """The runtime ships to users' machines; the cloud code and its SDKs do not."""
+    assert _violations(module, ("cloud",)) == []
+
+
+@pytest.mark.parametrize("module", _modules("cloud", "cloud/api", "cloud/worker"))
+def test_the_cloud_side_never_imports_the_runtime(module):
+    """There is no workspace, agent or local transport on a server to reach for."""
+    assert _violations(module, ("agents", "api", "core.workspace", "core.remote")) == []
 
 
 def test_the_guard_can_see_imports_at_all():
