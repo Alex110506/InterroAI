@@ -49,6 +49,20 @@ def test_empty_key_is_treated_as_missing(monkeypatch):
         llm.get_client(llm.FAST_TIMEOUT)
 
 
+def test_a_configured_key_wins_over_the_keychain(monkeypatch):
+    """The cloud processes have no keychain; they run on the platform key."""
+    monkeypatch.setattr(llm, "retrieve_openai_key", lambda: "sk-from-keychain")
+    llm.use_api_key("sk-platform")
+    assert llm.get_client(llm.FAST_TIMEOUT).api_key == "sk-platform"
+
+
+def test_clearing_the_configured_key_goes_back_to_the_keychain(without_api_key):
+    llm.use_api_key("sk-platform")
+    llm.use_api_key(None)
+    with pytest.raises(MissingAPIKeyError):
+        llm.get_client(llm.FAST_TIMEOUT)
+
+
 def test_sdk_retries_are_disabled(with_api_key):
     """
     tenacity owns the retry policy. Leaving the SDK's default of 2 would

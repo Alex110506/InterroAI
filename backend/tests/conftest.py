@@ -146,6 +146,12 @@ def fake_client():
 # ── API-key control ──────────────────────────────────────────────────────────
 
 
+@pytest.fixture(autouse=True)
+def no_configured_platform_key(monkeypatch):
+    """A platform key set by one test (`llm.use_api_key`) must not leak into the next."""
+    monkeypatch.setattr(llm_module, "_configured_key", None)
+
+
 @pytest.fixture
 def with_api_key(monkeypatch):
     """Make `core.models.llm.get_client` believe a key is stored."""
@@ -334,11 +340,9 @@ _CLOUD_TABLES = (
 
 
 @pytest.fixture(scope="session")
-def database_urls():
-    """The app-role and owner URLs, both moved onto the test database."""
-    from pydantic import ValidationError
+def stack_settings():
+    """Whatever of the stack's coordinates `.env` provides; each fixture checks its own."""
     from pydantic_settings import BaseSettings, SettingsConfigDict
-    from sqlalchemy.engine import make_url
 
     class StackSettings(BaseSettings):
         model_config = SettingsConfigDict(
@@ -346,21 +350,80 @@ def database_urls():
             env_file=(Path(__file__).resolve().parents[2] / ".env", ".env"),
             extra="ignore",
         )
-        database_url: str
-        migrations_database_url: str
+        database_url: str | None = None
+        migrations_database_url: str | None = None
+        blob_connection_string: str | None = None
+        servicebus_connection_string: str | None = None
+        servicebus_queue: str = "index-jobs"
 
-    try:
-        settings = StackSettings()
-    except ValidationError:
+    return StackSettings()
+
+
+@pytest.fixture(scope="session")
+def database_urls(stack_settings):
+    """The app-role and owner URLs, both moved onto the test database."""
+    from sqlalchemy.engine import make_url
+
+    if not (stack_settings.database_url and stack_settings.migrations_database_url):
         pytest.skip("INTERROAI_DATABASE_URL / INTERROAI_MIGRATIONS_DATABASE_URL are not set")
 
     def on_test_database(url: str) -> str:
         return make_url(url).set(database=_TEST_DATABASE).render_as_string(hide_password=False)
 
     return SimpleNamespace(
-        app=on_test_database(settings.database_url),
-        owner=on_test_database(settings.migrations_database_url),
+        app=on_test_database(stack_settings.database_url),
+        owner=on_test_database(stack_settings.migrations_database_url),
     )
+
+
+@pytest.fixture
+async def blob_uploads(stack_settings):
+    """A BlobUploadStore on a container of its own, so tests never touch dev uploads."""
+    from azure.core.exceptions import ServiceRequestError
+
+    from cloud.adapters.blob_uploads import BlobUploadStore
+
+    if not stack_settings.blob_connection_string:
+        pytest.skip("INTERROAI_BLOB_CONNECTION_STRING is not set")
+    store = BlobUploadStore.from_connection_string(
+        stack_settings.blob_connection_string, "interroai-test-uploads"
+    )
+    try:
+        await store.ensure_container()
+    except ServiceRequestError as exc:
+        await store.close()
+        pytest.skip(f"Azurite is not reachable ({exc}); run `docker compose up -d`.")
+    yield store
+    await store.close()
+
+
+@pytest.fixture
+async def service_bus_queue(stack_settings):
+    """The emulator's queue, drained first so no earlier test's message leaks in."""
+    from azure.servicebus.aio import ServiceBusClient
+    from azure.servicebus.exceptions import ServiceBusError
+
+    from cloud.adapters.service_bus import ServiceBusJobQueue
+
+    if not stack_settings.servicebus_connection_string:
+        pytest.skip("INTERROAI_SERVICEBUS_CONNECTION_STRING is not set")
+    connection_string = stack_settings.servicebus_connection_string
+    queue_name = stack_settings.servicebus_queue
+
+    try:
+        async with ServiceBusClient.from_connection_string(connection_string) as client:
+            async with client.get_queue_receiver(queue_name) as receiver:
+                while messages := await receiver.receive_messages(
+                    max_message_count=50, max_wait_time=1
+                ):
+                    for message in messages:
+                        await receiver.complete_message(message)
+    except (ServiceBusError, OSError) as exc:
+        pytest.skip(f"The Service Bus emulator is not reachable ({exc}).")
+
+    queue = ServiceBusJobQueue.from_connection_string(connection_string, queue_name)
+    yield queue
+    await queue.close()
 
 
 @pytest.fixture(scope="session")

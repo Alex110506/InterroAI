@@ -44,6 +44,9 @@ class WorkerSettings(BaseSettings):
 
     servicebus_connection_string: SecretStr
     servicebus_queue: str = "index-jobs"
+    #: Must match the queue's MaxDeliveryCount (infra/local/servicebus/config.json
+    #: locally; Terraform in Azure), or the worker gives up too early or never.
+    max_delivery_count: int = 5
 
     blob_connection_string: SecretStr
     blob_container: str = "uploads"

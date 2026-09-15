@@ -37,6 +37,7 @@ cloud = [
     "alembic>=1.13.0",
     "azure-servicebus>=7.14.0",  # 7.14.0 is the first with emulator support
     "azure-storage-blob>=12.20.0",
+    "aiohttp>=3.9.0",  # the transport the Azure SDKs' async clients need
     "pyjwt>=2.8.0",
 ]
 dev = [
@@ -49,6 +50,7 @@ dev = [
 
 [project.scripts]
 interroai-backend = "main:run"
+interroai-worker = "cloud.worker.main:main"
 
 # ── Packaging ────────────────────────────────────────────────────────────────
 # Flat layout (main.py + config.py at the root, alongside the api/, agents/,
