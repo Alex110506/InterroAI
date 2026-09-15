@@ -13,6 +13,7 @@ from types import SimpleNamespace
 import httpx
 import openai
 import pytest
+from fakes.models import MODEL, FakeGateway, FakeStream, chat_chunks
 from fakes.usage import InMemoryUsageMeter
 from fastapi.testclient import TestClient
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
@@ -23,94 +24,9 @@ from cloud.api.tokens import TokenSigner
 from cloud.db.usage import Quota
 from core.errors import MissingAPIKeyError
 
-MODEL = "gpt-5.4-mini"
 MESSAGES = [{"role": "user", "content": "Say hello"}]
 USER_ID = "user-1"
-
-
-def _completion(text: str = "Hello", *, prompt: int = 12, completion: int = 3) -> ChatCompletion:
-    return ChatCompletion.model_validate(
-        {
-            "id": "chatcmpl-1",
-            "object": "chat.completion",
-            "created": 1,
-            "model": MODEL,
-            "choices": [
-                {
-                    "index": 0,
-                    "finish_reason": "stop",
-                    "message": {"role": "assistant", "content": text},
-                }
-            ],
-            "usage": {
-                "prompt_tokens": prompt,
-                "completion_tokens": completion,
-                "total_tokens": prompt + completion,
-            },
-        }
-    )
-
-
-def _chunk(**fields) -> ChatCompletionChunk:
-    return ChatCompletionChunk.model_validate(
-        {"id": "chatcmpl-1", "object": "chat.completion.chunk", "created": 1, "model": MODEL}
-        | fields
-    )
-
-
-def _chunks(*texts: str, prompt: int = 12, completion: int = 3) -> list[ChatCompletionChunk]:
-    deltas = [
-        _chunk(choices=[{"index": 0, "delta": {"content": text}, "finish_reason": None}])
-        for text in texts
-    ]
-    usage = _chunk(
-        choices=[],
-        usage={
-            "prompt_tokens": prompt,
-            "completion_tokens": completion,
-            "total_tokens": prompt + completion,
-        },
-    )
-    return [*deltas, usage]
-
-
-class FakeStream:
-    def __init__(self, chunks, *, failure: Exception | None = None) -> None:
-        self._chunks = chunks
-        self._failure = failure
-        self.closed = False
-
-    def __aiter__(self):
-        return self._iterate()
-
-    async def _iterate(self):
-        for chunk in self._chunks:
-            yield chunk
-        if self._failure is not None:
-            raise self._failure
-
-    async def close(self) -> None:
-        self.closed = True
-
-
-class FakeGateway:
-    def __init__(self) -> None:
-        self.requests: list[dict] = []
-        self.completion = _completion()
-        self.stream = FakeStream(_chunks("Hel", "lo"))
-        self.failure: Exception | None = None
-
-    async def chat(self, *, timeout, **request):
-        self.requests.append(request)
-        if self.failure is not None:
-            raise self.failure
-        return self.completion
-
-    async def chat_stream(self, *, timeout, **request):
-        self.requests.append(request)
-        if self.failure is not None:
-            raise self.failure
-        return self.stream
+_ROOMY_QUOTA = Quota(requests=100, tokens=100_000)
 
 
 def _openai_error(cls, status: int):
@@ -125,9 +41,6 @@ def _openai_error(cls, status: int):
 @pytest.fixture
 def api():
     return _api()
-
-
-_ROOMY_QUOTA = Quota(requests=100, tokens=100_000)
 
 
 def _api(quota: Quota = _ROOMY_QUOTA):
@@ -199,7 +112,7 @@ async def test_a_stream_that_fails_part_way_ends_in_an_error_event_not_done(api)
     connection_lost = openai.APIConnectionError(
         request=httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
     )
-    api.gateway.stream = FakeStream(_chunks("Hel")[:1], failure=connection_lost)
+    api.gateway.stream = FakeStream(chat_chunks("Hel")[:1], failure=connection_lost)
 
     response = _post(api, stream=True)
 

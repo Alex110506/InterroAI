@@ -56,8 +56,8 @@ def _violations(relative: str, forbidden: tuple[str, ...]) -> list[str]:
 
 
 #: What the ports exist to hide — the model SDK, the embedding client, the
-#: vector store and the machinery behind the index — plus the two concrete
-#: implementations, which only `core/providers.py` may name.
+#: vector store and the machinery behind the index — plus the concrete
+#: implementations, local and remote, which only `core/providers.py` may name.
 _BEHIND_THE_PORTS = (
     "openai",
     "chromadb",
@@ -67,6 +67,7 @@ _BEHIND_THE_PORTS = (
     "core.index.embeddings",
     "core.index.indexer",
     "core.index.semantic_index.LocalSemanticIndex",
+    "core.remote",
 )
 
 _FEATURES = ("core.workspace", "core.index", "agents", "api")
@@ -91,6 +92,22 @@ def test_the_worker_never_touches_the_filesystem():
 @pytest.mark.parametrize("module", _modules("core/models", "core/local"))
 def test_plumbing_never_depends_on_a_feature(module):
     assert _violations(module, _FEATURES) == []
+
+
+@pytest.mark.parametrize("module", _modules("core/remote"))
+def test_the_cloud_clients_stay_clients(module):
+    """They are the ports' other implementations: features call them, never the reverse."""
+    forbidden = (
+        "core.workspace",
+        "agents",
+        "api",
+        "chromadb",
+        "core.models.llm",
+        "core.index.adapters",
+        "core.index.embeddings",
+        "core.index.indexer",
+    )
+    assert _violations(module, forbidden) == []
 
 
 @pytest.mark.parametrize("module", _modules("contracts"))

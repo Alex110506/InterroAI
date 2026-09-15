@@ -146,6 +146,24 @@ def fake_client():
 # ── API-key control ──────────────────────────────────────────────────────────
 
 
+@pytest.fixture
+def cloud_mode(monkeypatch):
+    """This process as a cloud client of https://api.example, for one test."""
+    from core import providers
+    from core.settings import get_runtime_settings
+
+    # Held directly: a test may monkeypatch `providers.cloud_session` itself,
+    # and that patch is still in place when this fixture tears down.
+    session_factory = providers.cloud_session
+    monkeypatch.setenv("INTERROAI_MODE", "cloud")
+    monkeypatch.setenv("INTERROAI_API_URL", "https://api.example")
+    get_runtime_settings.cache_clear()
+    session_factory.cache_clear()
+    yield
+    get_runtime_settings.cache_clear()
+    session_factory.cache_clear()
+
+
 @pytest.fixture(autouse=True)
 def no_configured_platform_key(monkeypatch):
     """A platform key set by one test (`llm.use_api_key`) must not leak into the next."""
