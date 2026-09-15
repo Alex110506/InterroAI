@@ -23,6 +23,7 @@ from core.index.adapters.memory import (
     InMemoryUploadStore,
 )
 from core.index.embeddings import EmbeddedBatch
+from core.index.ports import UnusableUploadError
 
 VECTOR = [0.1, 0.2, 0.3, 0.4]
 MAX_DELIVERIES = 3
@@ -195,6 +196,53 @@ async def test_a_missing_upload_fails_the_job_and_dead_letters_it(world):
     row = world.jobs.rows["job-1"]
     assert row["status"] == "failed"
     assert row["events"][-1]["step"] == "error", "the client must hear that it is over"
+    assert len(world.queue.dead_letters) == 1
+
+
+async def test_an_upload_naming_another_project_is_refused(world, embedded):
+    """The worker writes outside row-level security, so only the job row may name the project."""
+    chunk = Chunk(file_path="a.py", start_line=1, end_line=3, file_hash="h1", content="x = 1")
+    await world.uploads.put(
+        "uploads/job-1",
+        ChunkUpload(project_id="someone-elses-project", chunks=[chunk], changed_paths=["a.py"]),
+    )
+    world.jobs.add("job-1", world.project, "uploads/job-1")
+    await world.queue.enqueue(
+        IndexJobMessage(job_id="job-1", project_id=world.project, upload_ref="uploads/job-1")
+    )
+
+    await _handle_next(world)
+
+    assert world.jobs.rows["job-1"]["status"] == "failed"
+    assert embedded == [], "nothing may be embedded, let alone written"
+    assert len(world.queue.dead_letters) == 1
+
+
+async def test_an_unusable_upload_is_given_up_at_once(world):
+    """Too large or malformed fails the same way every time; retrying only delays the answer."""
+
+    class RefusingUploads(InMemoryUploadStore):
+        async def get(self, upload_ref):
+            raise UnusableUploadError("The upload is 30000000 bytes; the limit is 25000000.")
+
+    runner = JobRunner(
+        queue=world.queue,
+        uploads=RefusingUploads(),
+        store=ChromaChunkStore(),
+        cache=None,
+        jobs=world.jobs,
+        max_delivery_count=MAX_DELIVERIES,
+    )
+    world.jobs.add("job-1", world.project, "uploads/job-1")
+    await world.queue.enqueue(
+        IndexJobMessage(job_id="job-1", project_id=world.project, upload_ref="uploads/job-1")
+    )
+
+    await runner.handle(await world.queue.receive())
+
+    row = world.jobs.rows["job-1"]
+    assert row["status"] == "failed"
+    assert "the limit is" in row["error"]
     assert len(world.queue.dead_letters) == 1
 
 

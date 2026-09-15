@@ -18,7 +18,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from cloud.api import auth, projects
+from cloud.api import auth, indexing, llm_gateway, projects
 from cloud.api.services import Services, build_services
 from cloud.settings import ApiSettings
 
@@ -44,6 +44,8 @@ def create_app(services: Services | None = None) -> FastAPI:
 
     app.include_router(auth.router)
     app.include_router(projects.router)
+    app.include_router(indexing.router)
+    app.include_router(llm_gateway.router)
 
     @app.get("/health", tags=["meta"])
     async def health() -> dict:

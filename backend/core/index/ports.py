@@ -72,7 +72,11 @@ class IndexedChunk:
         return chunk_id(self.file_path, self.start_line)
 
 
-class UploadNotFoundError(LookupError):
+class UnusableUploadError(Exception):
+    """An upload that can never be indexed, however often the job is retried."""
+
+
+class UploadNotFoundError(UnusableUploadError, LookupError):
     """Nothing is stored under this reference: never uploaded, or already consumed."""
 
 

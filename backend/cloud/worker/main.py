@@ -38,7 +38,9 @@ async def run_worker(settings: WorkerSettings) -> None:
         return service_scope(sessions)
 
     uploads = BlobUploadStore.from_connection_string(
-        settings.blob_connection_string.get_secret_value(), settings.blob_container
+        settings.blob_connection_string.get_secret_value(),
+        settings.blob_container,
+        max_bytes=settings.max_upload_bytes,
     )
     queue = ServiceBusJobQueue.from_connection_string(
         settings.servicebus_connection_string.get_secret_value(), settings.servicebus_queue

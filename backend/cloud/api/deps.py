@@ -1,12 +1,14 @@
 """
-FastAPI dependencies shared by the routers: the process's services, and the caller.
+FastAPI dependencies and helpers shared by the routers.
 
 Errors meant for the app carry a stable `code` in `detail`, so the runtime can
-act on them (refresh on `invalid_token`, show a sign-in screen on
-`not_signed_in`) without parsing the message, which is for people.
+act on them without parsing the message, which is for people: refresh on
+`invalid_token`, show the sign-in screen on `not_signed_in`, tell the user to
+wait on `quota_exceeded`.
 """
 from __future__ import annotations
 
+from datetime import UTC, datetime, time, timedelta
 from typing import Annotated
 
 from fastapi import Depends, HTTPException, Request, status
@@ -34,11 +36,31 @@ def current_user(
         raise unauthorized("invalid_token", "The access token is invalid or has expired.") from None
 
 
+def api_error(status_code: int, code: str, message: str, **extra: object) -> HTTPException:
+    return HTTPException(status_code, detail={"code": code, "message": message, **extra})
+
+
 def unauthorized(code: str, message: str) -> HTTPException:
     return HTTPException(
         status.HTTP_401_UNAUTHORIZED,
         detail={"code": code, "message": message},
         headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
+async def charge_request(services: Services, user: AccessClaims) -> None:
+    """Count one request that spends the platform key, or refuse it with a 429."""
+    now = datetime.now(UTC)
+    if await services.usage.admit(user.user_id, now.date(), services.limits.quota):
+        return
+    midnight = datetime.combine(now.date() + timedelta(days=1), time.min, tzinfo=UTC)
+    raise HTTPException(
+        status.HTTP_429_TOO_MANY_REQUESTS,
+        detail={
+            "code": "quota_exceeded",
+            "message": "Today's allowance is used up. It resets at midnight UTC.",
+        },
+        headers={"Retry-After": str(int((midnight - now).total_seconds()) + 1)},
     )
 
 

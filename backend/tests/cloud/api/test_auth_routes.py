@@ -206,8 +206,14 @@ async def test_services_build_from_settings_without_connecting_anywhere():
     settings = ApiSettings(
         _env_file=None,
         database_url="postgresql+asyncpg://app:pw@127.0.0.1:1/none",
-        servicebus_connection_string="unused",
-        blob_connection_string="unused",
+        servicebus_connection_string=(
+            "Endpoint=sb://127.0.0.1;SharedAccessKeyName=k;SharedAccessKey=v;"
+            "UseDevelopmentEmulator=true;"
+        ),
+        blob_connection_string=(
+            "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=a2V5;"
+            "BlobEndpoint=http://127.0.0.1:1/devstoreaccount1;"
+        ),
         openai_api_key="unused",
         github_client_id="the-client-id",
         github_client_secret="the-client-secret",

@@ -12,7 +12,8 @@ event on the job row, and settles the message. How it settles is the point:
     message is abandoned and Service Bus redelivers it. On the queue's last
     allowed delivery the job is marked failed and the message dead-lettered, so
     no client is left waiting on a job no worker will ever finish.
-  * **The job cannot run at all** — no such job, no upload — so the message is
+  * **The job cannot run at all** — no such job, no usable upload, or an
+    upload for a different project than its job — so the message is
     dead-lettered straight away.
 
 A job that is already done or failed is completed without running: delivery is
@@ -32,6 +33,7 @@ from core.index.ports import (
     Delivery,
     EmbeddingCache,
     JobQueue,
+    UnusableUploadError,
     UploadNotFoundError,
     UploadStore,
 )
@@ -128,6 +130,17 @@ class JobRunner:
             upload = await self._uploads.get(message.upload_ref)
         except UploadNotFoundError:
             await self._give_up(delivery, "The job's upload is missing; index the project again.")
+            return
+        except UnusableUploadError as exc:
+            await self._give_up(delivery, str(exc))
+            return
+
+        if upload.project_id != job.project_id:
+            # The upload is written by the user; the job row by the API, which
+            # checked ownership. The worker writes outside row-level security,
+            # so only the row may say which project changes. Otherwise an upload
+            # naming someone else's project would index into it.
+            await self._give_up(delivery, "The upload is for a different project than its job.")
             return
 
         await self._jobs.mark_running(message.job_id)

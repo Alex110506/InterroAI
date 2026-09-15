@@ -50,6 +50,9 @@ class WorkerSettings(BaseSettings):
 
     blob_connection_string: SecretStr
     blob_container: str = "uploads"
+    #: The largest upload accepted. Checked when a job is created and again by
+    #: the worker before it reads one: a SAS URL cannot cap a blob's size.
+    max_upload_bytes: int = 25_000_000
 
     openai_api_key: SecretStr
 
@@ -73,7 +76,17 @@ class ApiSettings(WorkerSettings):
 
     daily_token_quota: int = 200_000
     daily_request_quota: int = 500
-    max_upload_bytes: int = 25_000_000
+
+    #: Comma-separated OpenAI model ids `/llm/chat` accepts: the ones the agents use.
+    chat_models: str = "gpt-5.4-mini,gpt-5.4,gpt-5.5"
+    #: How long an upload URL stays usable.
+    upload_url_ttl_seconds: int = 15 * 60
+    #: Idle time after which a job's event stream sends a keep-alive comment.
+    sse_heartbeat_seconds: float = 15.0
+
+    @property
+    def chat_model_allowlist(self) -> frozenset[str]:
+        return frozenset(model.strip() for model in self.chat_models.split(",") if model.strip())
 
     @property
     def allowlist(self) -> frozenset[str]:

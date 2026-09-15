@@ -1,8 +1,9 @@
 """
 Everything a request handler needs, built once per process.
 
-`create_app` accepts a `Services` so tests can hand in fakes. In production the
-app builds one from `ApiSettings` when it starts and closes it when it stops.
+`create_app` accepts a `Services` so tests can hand in fakes, and each test
+fills in only the parts its routes use. In production the app builds the whole
+thing from `ApiSettings` when it starts and closes it when it stops.
 """
 from __future__ import annotations
 
@@ -11,16 +12,35 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 
 import httpx
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from cloud.adapters.blob_uploads import BlobUploadStore
+from cloud.adapters.pg_cache import PostgresEmbeddingCache
+from cloud.adapters.service_bus import ServiceBusJobQueue
 from cloud.api.github import GitHubOAuth
+from cloud.api.job_events import JobNotifications, asyncpg_dsn
 from cloud.api.signin import SignInService
 from cloud.api.tokens import TokenSigner
 from cloud.db.accounts import Accounts, PostgresAccounts
 from cloud.db.projects import ProjectRepository
 from cloud.db.session import anonymous_scope, create_engine, create_session_factory
+from cloud.db.usage import PostgresUsageMeter, Quota, UsageMeter
 from cloud.settings import ApiSettings
+from core.index.embeddings import embed_texts
+from core.index.ports import JobQueue
+from core.models import llm
+from core.models.gateway import ModelGateway, OpenAIGateway
 
 CALLBACK_PATH = "/auth/github/callback"
+
+
+@dataclass(frozen=True)
+class Limits:
+    max_upload_bytes: int = 25_000_000
+    upload_url_ttl: timedelta = timedelta(minutes=15)
+    sse_heartbeat_seconds: float = 15.0
+    quota: Quota = Quota(requests=500, tokens=200_000)
+    chat_models: frozenset[str] = frozenset({"gpt-5.4-mini", "gpt-5.4", "gpt-5.5"})
 
 
 @dataclass
@@ -29,6 +49,15 @@ class Services:
     signer: TokenSigner
     accounts: Accounts
     projects: ProjectRepository
+    #: For the repositories that run in a user's scope, built per request.
+    sessions: async_sessionmaker[AsyncSession] | None = None
+    uploads: BlobUploadStore | None = None
+    queue: JobQueue | None = None
+    embed_query: Callable[[str], Awaitable[list[float]]] | None = None
+    usage: UsageMeter | None = None
+    gateway: ModelGateway | None = None
+    notifications: JobNotifications = field(default_factory=lambda: JobNotifications(None))
+    limits: Limits = field(default_factory=Limits)
     #: Sign-in cookies are marked Secure whenever the API is served over https.
     secure_cookies: bool = False
     closers: list[Callable[[], Awaitable[None]]] = field(default_factory=list)
@@ -40,17 +69,23 @@ class Services:
 
 def build_services(settings: ApiSettings) -> Services:
     """Wire the production adapters. Nothing connects until the first request."""
+    # The API embeds search queries and proxies chat, both on the platform key.
+    llm.use_api_key(settings.openai_api_key.get_secret_value())
+
     engine = create_engine(settings.database_url)
     sessions = create_session_factory(engine)
     http = httpx.AsyncClient()
     public_url = settings.public_api_url.rstrip("/")
+
+    def anonymous():
+        return anonymous_scope(sessions)
 
     signer = TokenSigner(
         settings.jwt_secret.get_secret_value(),
         issuer=public_url,
         access_ttl=timedelta(seconds=settings.access_token_ttl_seconds),
     )
-    accounts = PostgresAccounts(lambda: anonymous_scope(sessions))
+    accounts = PostgresAccounts(anonymous)
     github = GitHubOAuth(
         client_id=settings.github_client_id,
         client_secret=settings.github_client_secret.get_secret_value(),
@@ -64,11 +99,40 @@ def build_services(settings: ApiSettings) -> Services:
         allowlist=settings.allowlist,
         refresh_ttl=timedelta(days=settings.refresh_token_ttl_days),
     )
+    uploads = BlobUploadStore.from_connection_string(
+        settings.blob_connection_string.get_secret_value(),
+        settings.blob_container,
+        max_bytes=settings.max_upload_bytes,
+    )
+    queue = ServiceBusJobQueue.from_connection_string(
+        settings.servicebus_connection_string.get_secret_value(), settings.servicebus_queue
+    )
+    cache = PostgresEmbeddingCache(anonymous)
+    notifications = JobNotifications(asyncpg_dsn(settings.database_url))
+
+    async def embed_query(query: str) -> list[float]:
+        [vector] = await embed_texts([query], cache=cache)
+        return vector
+
     return Services(
         signin=signin,
         signer=signer,
         accounts=accounts,
         projects=ProjectRepository(sessions),
+        sessions=sessions,
+        uploads=uploads,
+        queue=queue,
+        embed_query=embed_query,
+        usage=PostgresUsageMeter(anonymous),
+        gateway=OpenAIGateway(),
+        notifications=notifications,
+        limits=Limits(
+            max_upload_bytes=settings.max_upload_bytes,
+            upload_url_ttl=timedelta(seconds=settings.upload_url_ttl_seconds),
+            sse_heartbeat_seconds=settings.sse_heartbeat_seconds,
+            quota=Quota(requests=settings.daily_request_quota, tokens=settings.daily_token_quota),
+            chat_models=settings.chat_model_allowlist,
+        ),
         secure_cookies=public_url.startswith("https://"),
-        closers=[engine.dispose, http.aclose],
+        closers=[engine.dispose, http.aclose, uploads.close, queue.close, notifications.close],
     )
