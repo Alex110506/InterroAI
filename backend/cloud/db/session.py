@@ -9,6 +9,8 @@ security policies from migration 0001 read that:
     forgotten `WHERE owner_id = …` returns nothing, not someone else's code.
   * `service_scope(sessions)` — the worker, which acts for whoever owns the job
     it is running and always addresses rows by the project on that job.
+  * `anonymous_scope(sessions)` — sign-in, which happens before anyone is known.
+    It sees no project, chunk or job at all.
 
 Both identities are transaction-local (`set_config(…, true)`), so they vanish
 at commit and a pooled connection can never carry one request's identity into
@@ -60,6 +62,21 @@ async def service_scope(sessions: async_sessionmaker[AsyncSession]) -> AsyncIter
     """A transaction for the worker, which acts across tenants by project id."""
     async with sessions() as session, session.begin():
         await session.execute(text("SELECT set_config('app.service', 'worker', true)"))
+        yield session
+
+
+@asynccontextmanager
+async def anonymous_scope(
+    sessions: async_sessionmaker[AsyncSession],
+) -> AsyncIterator[AsyncSession]:
+    """
+    A transaction on nobody's behalf, for the sign-in tables.
+
+    Those tables sit outside row-level security, so sign-in needs no identity —
+    and is given none, rather than borrowing the worker's: a bug in sign-in
+    code can then read no one's projects.
+    """
+    async with sessions() as session, session.begin():
         yield session
 
 
