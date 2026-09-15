@@ -20,6 +20,16 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 _ENV_FILES = ("../.env", ".env")
 
 
+class MigrationSettings(BaseSettings):
+    """Only what Alembic needs: the owner role's connection string."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="INTERROAI_", env_file=_ENV_FILES, extra="ignore"
+    )
+
+    migrations_database_url: str
+
+
 class WorkerSettings(BaseSettings):
     """What both cloud processes need: storage, the queue, and the platform key."""
 

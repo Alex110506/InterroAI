@@ -110,7 +110,9 @@ def test_the_runtime_never_imports_the_cloud_side(module):
     assert _violations(module, ("cloud",)) == []
 
 
-@pytest.mark.parametrize("module", _modules("cloud", "cloud/api", "cloud/worker"))
+@pytest.mark.parametrize(
+    "module", _modules("cloud", "cloud/adapters", "cloud/api", "cloud/db", "cloud/worker")
+)
 def test_the_cloud_side_never_imports_the_runtime(module):
     """There is no workspace, agent or local transport on a server to reach for."""
     assert _violations(module, ("agents", "api", "core.workspace", "core.remote")) == []

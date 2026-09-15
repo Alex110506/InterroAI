@@ -316,3 +316,125 @@ def tmp_project(tmp_path) -> Path:
     (root / "node_modules" / "pkg" / "index.js").write_text("export function v() {}\n", encoding="utf-8")  # noqa: E501
     (root / ".hidden" / "x.py").write_text("HIDDEN = 1\n", encoding="utf-8")
     return root
+
+
+# ── The local stack (integration tests only) ─────────────────────────────────
+#
+# Used by tests marked `integration`, which the default run deselects. They take
+# the stack's coordinates from the same `.env` it was started with, point both
+# database roles at the dedicated `interroai_test` database (created by
+# infra/local/postgres/init/01-roles.sh), rebuild its schema from the migrations
+# once per run, and empty every table before each test. Imports are local so an
+# ordinary run never pays for SQLAlchemy or Alembic.
+
+_TEST_DATABASE = "interroai_test"
+_CLOUD_TABLES = (
+    "users, refresh_tokens, login_codes, projects, chunks, embedding_cache, index_jobs, usage"
+)
+
+
+@pytest.fixture(scope="session")
+def database_urls():
+    """The app-role and owner URLs, both moved onto the test database."""
+    from pydantic import ValidationError
+    from pydantic_settings import BaseSettings, SettingsConfigDict
+    from sqlalchemy.engine import make_url
+
+    class StackSettings(BaseSettings):
+        model_config = SettingsConfigDict(
+            env_prefix="INTERROAI_",
+            env_file=(Path(__file__).resolve().parents[2] / ".env", ".env"),
+            extra="ignore",
+        )
+        database_url: str
+        migrations_database_url: str
+
+    try:
+        settings = StackSettings()
+    except ValidationError:
+        pytest.skip("INTERROAI_DATABASE_URL / INTERROAI_MIGRATIONS_DATABASE_URL are not set")
+
+    def on_test_database(url: str) -> str:
+        return make_url(url).set(database=_TEST_DATABASE).render_as_string(hide_password=False)
+
+    return SimpleNamespace(
+        app=on_test_database(settings.database_url),
+        owner=on_test_database(settings.migrations_database_url),
+    )
+
+
+@pytest.fixture(scope="session")
+def migrated_database(database_urls):
+    """The test database's schema, rebuilt from the migrations once per run."""
+    from alembic import command
+    from alembic.config import Config
+
+    config = Config(str(Path(__file__).resolve().parents[1] / "cloud" / "alembic.ini"))
+    config.set_main_option("sqlalchemy.url", database_urls.owner)
+    config.attributes["configure_logger"] = False
+    try:
+        command.downgrade(config, "base")
+    except OSError as exc:
+        pytest.skip(f"The local stack is not reachable ({exc}); run `docker compose up -d`.")
+    command.upgrade(config, "head")
+
+
+@pytest.fixture
+async def owner_engine(migrated_database, database_urls):
+    """The owner role — bypasses row-level security, so only for arranging data."""
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    engine = create_async_engine(database_urls.owner)
+    async with engine.begin() as connection:
+        await connection.execute(text(f"TRUNCATE {_CLOUD_TABLES} CASCADE"))
+    yield engine
+    await engine.dispose()
+
+
+@pytest.fixture
+async def app_sessions(owner_engine, database_urls):
+    """Sessions as the app role, which row-level security applies to."""
+    from cloud.db.session import create_engine, create_session_factory
+
+    engine = create_engine(database_urls.app)
+    yield create_session_factory(engine)
+    await engine.dispose()
+
+
+@pytest.fixture
+def pg_new_user(owner_engine):
+    from sqlalchemy import text
+
+    async def make(login: str = "someone") -> str:
+        async with owner_engine.begin() as connection:
+            result = await connection.execute(
+                text(
+                    "INSERT INTO users (id, github_id, login) "
+                    "VALUES (gen_random_uuid(), floor(random() * 1e12)::bigint, :login) "
+                    "RETURNING id"
+                ),
+                {"login": login},
+            )
+            return str(result.scalar_one())
+
+    return make
+
+
+@pytest.fixture
+def pg_new_project(owner_engine, pg_new_user):
+    from sqlalchemy import text
+
+    async def make(owner_id: str | None = None) -> str:
+        owner_id = owner_id or await pg_new_user()
+        async with owner_engine.begin() as connection:
+            result = await connection.execute(
+                text(
+                    "INSERT INTO projects (id, owner_id, name) "
+                    "VALUES (gen_random_uuid(), :owner, 'test-project') RETURNING id"
+                ),
+                {"owner": owner_id},
+            )
+            return str(result.scalar_one())
+
+    return make
