@@ -119,7 +119,6 @@ def test_transient_set_covers_the_recoverable_failures():
 @pytest.mark.parametrize(
     "error",
     [
-        APITimeoutError(request=REQUEST),
         APIConnectionError(request=REQUEST),
         lambda: _status_error(RateLimitError, 429),
         lambda: _status_error(InternalServerError, 500),
@@ -137,8 +136,30 @@ async def test_retries_give_up_after_the_attempt_budget(fake_client):
     failures = [APITimeoutError(request=REQUEST) for _ in range(10)]
     client = fake_client(failures)
     with pytest.raises(APITimeoutError):
-        await _instant(llm.chat_completion)(client, model="m")
+        await _instant(llm.embed_batch)(client, model="e", input=["x"])
     assert len(client.calls) == 4
+
+
+async def test_a_chat_that_timed_out_is_not_tried_again(fake_client):
+    """
+    The same long prompt takes the same long time, and someone is waiting on it.
+    Through the cloud, the request is cancelled at the ingress before a second
+    attempt could finish.
+    """
+    client = fake_client([APITimeoutError(request=REQUEST) for _ in range(4)])
+
+    with pytest.raises(APITimeoutError):
+        await _instant(llm.chat_completion)(client, model="m")
+
+    assert len(client.calls) == 1
+
+
+async def test_an_embedding_that_timed_out_is_tried_again(fake_client):
+    """Nobody waits on the worker, and a batch that does land is cached."""
+    client = fake_client([APITimeoutError(request=REQUEST), "vectors"])
+
+    assert await _instant(llm.embed_batch)(client, model="e", input=["x"]) == "vectors"
+    assert len(client.calls) == 2
 
 
 @pytest.mark.parametrize(
@@ -184,7 +205,7 @@ async def test_chat_stream_retries_only_the_handshake(fake_client):
     Establishing the stream is safe to retry because nothing has been yielded
     yet. (Mid-iteration failures are the caller's problem by design.)
     """
-    client = fake_client([APITimeoutError(request=REQUEST), "stream-object"])
+    client = fake_client([APIConnectionError(request=REQUEST), "stream-object"])
     assert await _instant(llm.chat_stream)(client, model="m") == "stream-object"
     assert len(client.calls) == 2
 
@@ -197,7 +218,7 @@ async def test_embed_batch_retries_transient_failures(fake_client):
 
 async def test_retry_warns_before_sleeping(fake_client, caplog):
     """A silent retry hides a degrading provider; each one must be logged."""
-    client = fake_client([APITimeoutError(request=REQUEST), "ok"])
+    client = fake_client([APIConnectionError(request=REQUEST), "ok"])
     with caplog.at_level("WARNING", logger="core.models.llm"):
         await _instant(llm.chat_completion)(client, model="m")
     assert any("Retrying" in r.message for r in caplog.records)

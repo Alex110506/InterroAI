@@ -50,7 +50,27 @@ def _async(value):
 
 
 def test_every_display_id_maps_to_an_api_id():
-    assert _MODEL_MAP and all(isinstance(v, str) and v for v in _MODEL_MAP.values())
+    assert _MODEL_MAP and all(model.api_id for model in _MODEL_MAP.values())
+
+
+def test_a_models_two_display_ids_differ_only_in_effort():
+    """Without the effort, "low" and "high" would be the very same request."""
+    low, high = _MODEL_MAP["gpt-5.4-low-effort"], _MODEL_MAP["gpt-5.4-high-effort"]
+
+    assert low.api_id == high.api_id
+    assert (low.effort, high.effort) == ("low", "high")
+
+
+def test_the_chosen_effort_is_sent(tmp_path):
+    assert CoderAgent(str(tmp_path), "gpt-5.4-low-effort")._build_create_kwargs([])[
+        "reasoning_effort"
+    ] == "low"
+
+
+def test_no_effort_is_sent_to_a_model_that_has_none(tmp_path):
+    """Sending `reasoning_effort` to an ordinary model is a 400."""
+    kwargs = CoderAgent(str(tmp_path), "gpt-5.4-mini")._build_create_kwargs([])
+    assert "reasoning_effort" not in kwargs
 
 
 def test_display_id_is_translated(tmp_path):

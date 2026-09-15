@@ -188,6 +188,13 @@ def test_tokens_past_the_daily_quota_refuse_the_next_request():
         (_openai_error(openai.AuthenticationError, 401), 503, "llm_unavailable"),
         (_openai_error(openai.RateLimitError, 429), 503, "llm_unavailable"),
         (_openai_error(openai.InternalServerError, 500), 502, "upstream_error"),
+        (
+            openai.APITimeoutError(
+                request=httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+            ),
+            504,
+            "model_timeout",
+        ),
     ],
 )
 @pytest.mark.parametrize("stream", [False, True])

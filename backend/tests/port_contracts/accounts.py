@@ -89,6 +89,26 @@ class AccountsContract:
 
         assert (await accounts.use_refresh_token("token-1", now=NOW)).status == "reused"
 
+    # ── Housekeeping ─────────────────────────────────────────────────────────
+
+    async def test_purging_drops_what_has_lapsed_and_keeps_what_has_not(self, accounts):
+        user = await _user(accounts)
+        await accounts.add_login_code(
+            "live", user_id=user.id, code_challenge="the-challenge", expires_at=LATER
+        )
+        await accounts.add_refresh_token("live-token", user_id=user.id, expires_at=LATER)
+        await accounts.add_login_code("lapsed", user_id=user.id, code_challenge="c", expires_at=NOW)
+        await accounts.add_refresh_token("lapsed-token", user_id=user.id, expires_at=NOW)
+
+        assert await accounts.purge_expired(now=LATER) == 2
+
+        assert await accounts.redeem_login_code("live", now=NOW) == RedeemedCode(
+            user_id=user.id, code_challenge="the-challenge"
+        )
+        assert await accounts.use_refresh_token("live-token", now=NOW) == RefreshOutcome(
+            "ok", user.id
+        )
+
     async def test_revoking_all_ends_every_token_of_that_user_only(self, accounts):
         alice, bob = await _user(accounts, "alice"), await _user(accounts, "bob")
         for token, owner in (("a1", alice), ("a2", alice), ("b1", bob)):

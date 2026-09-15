@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal, Protocol
 
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.dialects.postgresql import insert
 
 from cloud.db.models import LoginCode, RefreshToken, User
@@ -73,6 +73,10 @@ class Accounts(Protocol):
     async def revoke_refresh_token(self, token_hash: str, *, now: datetime) -> None: ...
 
     async def revoke_all_refresh_tokens(self, user_id: str, *, now: datetime) -> None: ...
+
+    async def purge_expired(self, *, now: datetime) -> int:
+        """Delete the credentials that expired before *now*. Returns how many went."""
+        ...
 
 
 class PostgresAccounts:
@@ -199,6 +203,21 @@ class PostgresAccounts:
                 )
                 .values(revoked_at=now)
             )
+
+    async def purge_expired(self, *, now: datetime) -> int:
+        """
+        Drop the login codes and refresh tokens that expired before *now*.
+
+        Both tables only ever grow otherwise, and nothing reads a row once it
+        has lapsed. A spent but unexpired token stays: it is what tells a
+        replayed token apart from one that was never issued.
+        """
+        async with self._scope() as session:
+            codes = await session.execute(delete(LoginCode).where(LoginCode.expires_at < now))
+            tokens = await session.execute(
+                delete(RefreshToken).where(RefreshToken.expires_at < now)
+            )
+        return (codes.rowcount or 0) + (tokens.rowcount or 0)
 
 
 def _user(row) -> UserRecord:

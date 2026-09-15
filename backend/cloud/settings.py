@@ -44,6 +44,13 @@ class WorkerSettings(BaseSettings):
     #: The owner role, for migrations only. Never used by a running service.
     migrations_database_url: str | None = None
 
+    #: Connections this process holds, and how many more it may open in a burst.
+    #: Every replica of the API and the worker draws on one allowance — a
+    #: Postgres B1ms permits 35 user connections — so each keeps only what it
+    #: needs. The worker handles one job at a time, so it needs very few.
+    database_pool_size: int = 2
+    database_max_overflow: int = 2
+
     servicebus_connection_string: SecretStr
     servicebus_queue: str = "index-jobs"
     #: Must match the queue's MaxDeliveryCount (infra/local/servicebus/config.json
@@ -70,6 +77,10 @@ class ApiSettings(WorkerSettings):
     github_client_id: str
     github_client_secret: SecretStr
     public_api_url: str = "http://localhost:8080"
+
+    #: The API serves many requests at once, so it holds more than the worker.
+    database_pool_size: int = 5
+    database_max_overflow: int = 5
 
     #: HS256 key for access tokens. 32 bytes is the floor for HMAC-SHA256 to
     #: carry its full strength.

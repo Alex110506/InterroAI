@@ -183,12 +183,20 @@ class SignInService:
             identity.id, identity.login, identity.avatar_url
         )
         login_code = new_secret()
+        now = self._clock()
         await self._accounts.add_login_code(
             digest(login_code),
             user_id=user.id,
             code_challenge=flow.code_challenge,
-            expires_at=self._clock() + LOGIN_CODE_TTL,
+            expires_at=now + LOGIN_CODE_TTL,
         )
+        # Where the two credential tables get their housekeeping: sign-ins are
+        # rare, and a lapsed row is read by nothing. Failing at it is not this
+        # user's problem — they are in the middle of signing in.
+        try:
+            await self._accounts.purge_expired(now=now)
+        except Exception:  # noqa: BLE001
+            logger.warning("Could not clear out expired sign-in credentials", exc_info=True)
         return _to_app(flow, code=login_code)
 
     async def redeem(self, *, code: str, code_verifier: str) -> TokenPair:

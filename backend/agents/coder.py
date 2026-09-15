@@ -21,6 +21,7 @@ import json
 import logging
 import re
 from pathlib import Path
+from typing import NamedTuple
 
 from contracts.indexing import SearchHit, SearchRequest
 from core import providers
@@ -43,13 +44,23 @@ logger = logging.getLogger(__name__)
 _MAX_TOOL_ROUNDS = 20
 _MAX_CORRECTIONS = 3
 
-# Map display-facing model IDs to real OpenAI API model IDs
-_MODEL_MAP: dict[str, str] = {
-    "gpt-5.4-mini":        "gpt-5.4-mini",
-    "gpt-5.4-low-effort":  "gpt-5.4",
-    "gpt-5.4-high-effort": "gpt-5.4",
-    "gpt-5.5-low-effort":  "gpt-5.5",
-    "gpt-5.5-high-effort": "gpt-5.5",
+class _Model(NamedTuple):
+    """What a display ID resolves to: the real model, and how hard it should think."""
+
+    api_id: str
+    #: OpenAI's `reasoning_effort`. None for models that have no such setting.
+    #: It is the entire difference between a model's two display IDs — without
+    #: it, "low effort" and "high effort" are the very same request.
+    effort: str | None = None
+
+
+# Map display-facing model IDs to real OpenAI API model IDs and reasoning effort
+_MODEL_MAP: dict[str, _Model] = {
+    "gpt-5.4-mini":        _Model("gpt-5.4-mini"),
+    "gpt-5.4-low-effort":  _Model("gpt-5.4", "low"),
+    "gpt-5.4-high-effort": _Model("gpt-5.4", "high"),
+    "gpt-5.5-low-effort":  _Model("gpt-5.5", "low"),
+    "gpt-5.5-high-effort": _Model("gpt-5.5", "high"),
 }
 
 # Reasoning models require temperature to be omitted
@@ -220,15 +231,18 @@ class CoderAgent:
         # request so a follow-up ("now the other one") has a referent.
         self._history: list[dict] = list(history or [])
         self._path = Path(project_path).resolve()
-        self._api_model = _MODEL_MAP.get(model, model)   # resolve display ID → real API ID
+        resolved = _MODEL_MAP.get(model) or _Model(model)   # display ID → real API ID
+        self._api_model = resolved.api_id
         self._is_reasoning = self._api_model in _REASONING_MODELS
+        # Only reasoning models take an effort; sending one to the others is a 400.
+        self._effort = resolved.effort if self._is_reasoning else None
         # Where model calls and semantic searches go. The agent neither knows
         # nor cares whether that is OpenAI and a local index, or the cloud.
         self._gateway = gateway or providers.model_gateway()
         self._index = index or providers.semantic_index()
         self._modified: set[str] = set()   # absolute paths of files written/patched
-        logger.info("CoderAgent init: requested=%r  api_model=%r  reasoning=%s",
-                    model, self._api_model, self._is_reasoning)
+        logger.info("CoderAgent init: requested=%r  api_model=%r  reasoning=%s  effort=%s",
+                    model, self._api_model, self._is_reasoning, self._effort)
 
     # ── Public entry point ─────────────────────────────────────────────────
 
@@ -295,6 +309,8 @@ class CoderAgent:
 
     def _build_create_kwargs(self, messages: list[dict], temperature: float = 0.2, **extra) -> dict:
         kwargs: dict = {"model": self._api_model, "messages": messages, **extra}
+        if self._effort:
+            kwargs["reasoning_effort"] = self._effort
         if not self._is_reasoning:
             kwargs["temperature"] = temperature
         return kwargs

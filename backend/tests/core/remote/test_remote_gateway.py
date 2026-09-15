@@ -22,7 +22,8 @@ from cloud.api.services import Limits, Services
 from cloud.api.tokens import TokenSigner
 from cloud.db.usage import Quota
 from core.errors import CloudError, QuotaExceededError, UpstreamLLMError
-from core.remote.gateway import RemoteModelGateway
+from core.models.gateway import LONG_TIMEOUT
+from core.remote.gateway import RemoteModelGateway, cloud_timeout
 from core.remote.session import CloudSession
 
 CLOUD = "http://cloud.test"
@@ -105,6 +106,31 @@ async def test_a_quota_refusal_raises_before_any_stream_starts(fake_keyring):
         await gateway.chat(model=MODEL, messages=MESSAGES)
 
     assert upstream.requests == []
+
+
+async def test_a_model_that_took_too_long_says_so_rather_than_blaming_the_cloud(world):
+    gateway, upstream = world
+    upstream.failure = openai.APITimeoutError(
+        request=httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+    )
+
+    with pytest.raises(CloudError) as raised:
+        await gateway.chat(model=MODEL, messages=MESSAGES)
+
+    assert raised.value.code == "model_timeout"
+    assert "too long" in str(raised.value)
+
+
+def test_the_runtime_waits_longer_than_the_api_spends_upstream():
+    """
+    Both ends giving up together would hide the API's answer behind a dropped
+    connection — and the whole wait still has to fit the ingress's 240 seconds.
+    """
+    allowed = cloud_timeout(LONG_TIMEOUT)
+
+    assert allowed.read > LONG_TIMEOUT.read
+    assert allowed.read < 240
+    assert allowed.connect == LONG_TIMEOUT.connect
 
 
 async def test_a_model_the_cloud_does_not_offer_is_refused_with_its_code(world):

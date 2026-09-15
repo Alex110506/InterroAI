@@ -48,6 +48,24 @@ async def test_racing_redemptions_of_one_login_code_let_exactly_one_through(pg_a
     assert sum(result is not None for result in redeemed) == 1
 
 
+async def test_purging_really_removes_the_rows(pg_accounts, app_sessions):
+    """Both tables only ever grow otherwise: a code per sign-in, a token per refresh."""
+    user = await pg_accounts.upsert_github_user(9, "tidy", None)
+    await pg_accounts.add_login_code("lapsed", user_id=user.id, code_challenge="c", expires_at=NOW)
+    await pg_accounts.add_refresh_token("lapsed", user_id=user.id, expires_at=NOW)
+
+    assert await pg_accounts.purge_expired(now=LATER) == 2
+
+    async with anonymous_scope(app_sessions) as session:
+        left = await session.execute(
+            text(
+                "SELECT (SELECT count(*) FROM login_codes) "
+                "+ (SELECT count(*) FROM refresh_tokens)"
+            )
+        )
+        assert left.scalar_one() == 0
+
+
 async def test_the_sign_in_scope_sees_no_ones_projects(app_sessions, pg_new_project):
     await pg_new_project()
     async with anonymous_scope(app_sessions) as session:

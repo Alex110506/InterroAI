@@ -26,6 +26,19 @@ from core.models.gateway import LONG_TIMEOUT
 from core.remote.session import CloudSession
 from core.remote.sse import read_events
 
+#: The API spends the caller's whole budget on OpenAI itself, so the runtime
+#: allows a little more than that. Giving up at the same moment would produce a
+#: dropped connection here — reported as an unreachable cloud — instead of the
+#: API's own answer, which says the model took too long. The total stays inside
+#: Container Apps' 240-second limit on any one request.
+_MARGIN_SECONDS = 30.0
+
+
+def cloud_timeout(timeout: httpx.Timeout) -> httpx.Timeout:
+    """*timeout*, plus the margin the extra hop through the Cloud API needs."""
+    read = (timeout.read or LONG_TIMEOUT.read) + _MARGIN_SECONDS
+    return httpx.Timeout(read, connect=timeout.connect)
+
 
 class RemoteModelGateway:
     def __init__(self, session: CloudSession) -> None:
@@ -35,7 +48,7 @@ class RemoteModelGateway:
         self, *, timeout: httpx.Timeout = LONG_TIMEOUT, **request: Any
     ) -> ChatCompletion:
         response = await self._session.request(
-            "POST", "/llm/chat", json=request, timeout=timeout
+            "POST", "/llm/chat", json=request, timeout=cloud_timeout(timeout)
         )
         return ChatCompletion.model_validate(response.json())
 
@@ -48,7 +61,10 @@ class RemoteModelGateway:
         try:
             response = await exits.enter_async_context(
                 self._session.stream(
-                    "POST", "/llm/chat", json={**request, "stream": True}, timeout=timeout
+                    "POST",
+                    "/llm/chat",
+                    json={**request, "stream": True},
+                    timeout=cloud_timeout(timeout),
                 )
             )
         except BaseException:

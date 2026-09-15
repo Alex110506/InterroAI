@@ -80,3 +80,12 @@ class InMemoryAccounts:
         for row in self.refresh_tokens.values():
             if row["user_id"] == user_id and row["revoked_at"] is None:
                 row["revoked_at"] = now
+
+    async def purge_expired(self, *, now: datetime) -> int:
+        codes = [key for key, row in self.login_codes.items() if row["expires_at"] < now]
+        tokens = [key for key, row in self.refresh_tokens.items() if row["expires_at"] < now]
+        for key in codes:
+            del self.login_codes[key]
+        for key in tokens:
+            del self.refresh_tokens[key]
+        return len(codes) + len(tokens)

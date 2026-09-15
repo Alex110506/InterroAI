@@ -111,7 +111,16 @@ def upstream_errors() -> Iterator[None]:
     except (openai.AuthenticationError, openai.PermissionDeniedError):
         logger.error("OpenAI refused the platform key")
         raise api_error(503, "llm_unavailable", "The model service is unavailable.") from None
-    except (openai.RateLimitError, openai.APITimeoutError, openai.APIConnectionError):
+    except openai.APITimeoutError:
+        # Deliberately not retried (core.models.llm), and Container Apps cancels
+        # the request at 240 seconds anyway. Saying so plainly matters: the
+        # runtime would otherwise report the whole cloud as unreachable.
+        raise api_error(
+            504,
+            "model_timeout",
+            "The model took too long to answer. Try a smaller task, or a faster model.",
+        ) from None
+    except (openai.RateLimitError, openai.APIConnectionError):
         # Already retried with backoff in core.models.llm.
         raise api_error(
             503, "llm_unavailable", "The model service is busy. Try again shortly."

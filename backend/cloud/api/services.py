@@ -7,6 +7,7 @@ thing from `ApiSettings` when it starts and closes it when it stops.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -34,6 +35,11 @@ from core.models import llm
 from core.models.gateway import ModelGateway, OpenAIGateway
 
 CALLBACK_PATH = "/auth/github/callback"
+
+#: How long one startup step may run before the app starts without it. The
+#: Azure SDKs retry an unreachable endpoint for minutes on their own, which is
+#: far longer than any platform waits for a first health check.
+_STARTUP_STEP_TIMEOUT_SECONDS = 10.0
 
 logger = logging.getLogger(__name__)
 
@@ -76,15 +82,19 @@ class Services:
         """
         Run the startup steps.
 
-        A step that fails is logged, not fatal: with storage down, sign-in and
-        everything else should still work, and the upload that needed storage
-        fails with its own error.
+        A step that fails or runs long is logged, not fatal: with storage down,
+        sign-in and everything else should still work, and the upload that
+        needed storage fails with its own error. The time limit carries as much
+        weight as the exception — an unreachable endpoint does not raise
+        promptly, it retries in the SDK until well past any health check.
         """
         for step in self.startup:
+            name = getattr(step, "__qualname__", repr(step))
             try:
-                await step()
+                await asyncio.wait_for(step(), _STARTUP_STEP_TIMEOUT_SECONDS)
+            except TimeoutError:
+                logger.warning("A startup step timed out (%s); starting anyway", name)
             except Exception:  # noqa: BLE001
-                name = getattr(step, "__qualname__", repr(step))
                 logger.warning("A startup step failed (%s); starting anyway", name, exc_info=True)
 
     async def close(self) -> None:
@@ -97,7 +107,11 @@ def build_services(settings: ApiSettings) -> Services:
     # The API embeds search queries and proxies chat, both on the platform key.
     llm.use_api_key(settings.openai_api_key.get_secret_value())
 
-    engine = create_engine(settings.database_url)
+    engine = create_engine(
+        settings.database_url,
+        pool_size=settings.database_pool_size,
+        max_overflow=settings.database_max_overflow,
+    )
     sessions = create_session_factory(engine)
     http = httpx.AsyncClient()
     public_url = settings.public_api_url.rstrip("/")

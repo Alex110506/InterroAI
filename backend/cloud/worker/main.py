@@ -32,7 +32,11 @@ async def run_worker(settings: WorkerSettings) -> None:
     # The worker has no keychain; it embeds with the platform key.
     llm.use_api_key(settings.openai_api_key.get_secret_value())
 
-    engine = create_engine(settings.database_url)
+    engine = create_engine(
+        settings.database_url,
+        pool_size=settings.database_pool_size,
+        max_overflow=settings.database_max_overflow,
+    )
     sessions = create_session_factory(engine)
 
     def scope():

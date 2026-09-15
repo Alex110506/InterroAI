@@ -35,10 +35,25 @@ from sqlalchemy.ext.asyncio import (
 ScopeFactory = Callable[[], AbstractAsyncContextManager[AsyncSession]]
 
 
-def create_engine(database_url: str) -> AsyncEngine:
+#: How many connections one process holds, and how many more it may open in a
+#: burst. Every replica of both services draws on one server's allowance — a
+#: Postgres B1ms permits 35 user connections in all — so a process keeps only
+#: what it needs, and `cloud/settings.py` sets the figure per service.
+DEFAULT_POOL_SIZE = 5
+DEFAULT_MAX_OVERFLOW = 5
+
+
+def create_engine(
+    database_url: str,
+    *,
+    pool_size: int = DEFAULT_POOL_SIZE,
+    max_overflow: int = DEFAULT_MAX_OVERFLOW,
+) -> AsyncEngine:
     # pre_ping: Azure closes idle connections; a dead pooled one should be
     # replaced, not surface as a failed request.
-    return create_async_engine(database_url, pool_pre_ping=True)
+    return create_async_engine(
+        database_url, pool_pre_ping=True, pool_size=pool_size, max_overflow=max_overflow
+    )
 
 
 def create_session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:

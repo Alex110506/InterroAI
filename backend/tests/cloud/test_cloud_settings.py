@@ -36,6 +36,14 @@ def test_the_worker_needs_no_sign_in_secrets():
     assert settings.servicebus_queue == "index-jobs"
 
 
+def test_the_worker_holds_fewer_connections_than_the_api():
+    """One job at a time needs very few; every replica shares the server's allowance."""
+    worker = WorkerSettings(_env_file=None, **_WORKER)
+
+    assert worker.database_pool_size < _api().database_pool_size
+    assert worker.database_pool_size + worker.database_max_overflow <= 5
+
+
 def test_a_missing_database_url_fails_at_start_up():
     values = {key: value for key, value in _WORKER.items() if key != "database_url"}
     with pytest.raises(ValidationError):
