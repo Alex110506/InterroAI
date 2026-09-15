@@ -233,6 +233,8 @@ class RemoteSemanticIndex:
             except httpx.TransportError as exc:
                 raise CloudUnavailableError("The upload to InterroAI's storage failed.") from exc
         if not response.is_success:
-            raise CloudError(
-                f"Storage refused the upload ({response.status_code}).", code="upload_failed"
-            )
+            # Azure names the reason in a header: ContainerNotFound,
+            # AuthenticationFailed (an expired URL), and so on.
+            reason = response.headers.get("x-ms-error-code")
+            status = f"{response.status_code} {reason}" if reason else str(response.status_code)
+            raise CloudError(f"Storage refused the upload ({status}).", code="upload_failed")

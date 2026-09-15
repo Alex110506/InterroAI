@@ -43,6 +43,25 @@ async def test_an_upload_is_stored_as_plain_json(blob_uploads):
     assert json.loads(raw)["changed_paths"] == ["a.py"]
 
 
+async def test_ensuring_the_container_creates_it_once_and_then_does_nothing(
+    blob_uploads, stack_settings
+):
+    """The API does this at startup, so a fresh stack accepts uploads and a restart is harmless."""
+    store = BlobUploadStore.from_connection_string(
+        stack_settings.blob_connection_string, f"interroai-test-{uuid4().hex[:12]}"
+    )
+    try:
+        await store.ensure_container()
+        await store.ensure_container()
+
+        upload_ref = _ref()
+        await store.put(upload_ref, ChunkUpload(project_id="p", changed_paths=["a.py"]))
+        assert (await store.get(upload_ref)).changed_paths == ["a.py"]
+    finally:
+        await store._container.delete_container()
+        await store.close()
+
+
 # ── Upload URLs ──────────────────────────────────────────────────────────────
 
 

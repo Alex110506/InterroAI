@@ -87,10 +87,12 @@ class FakeBlob:
     def __init__(self) -> None:
         self.puts: list[httpx.Request] = []
         self.status = 201
+        self.error_code: str | None = None
 
     async def __call__(self, request: httpx.Request) -> httpx.Response:
         self.puts.append(request)
-        return httpx.Response(self.status)
+        headers = {"x-ms-error-code": self.error_code} if self.error_code else {}
+        return httpx.Response(self.status, headers=headers)
 
 
 @pytest.fixture
@@ -227,6 +229,15 @@ async def test_storage_refusing_the_upload_is_an_error(world):
         await world.index.upload(ChunkUpload(project_id=PROJECT_PATH, changed_paths=["a.py"]))
 
     assert raised.value.code == "upload_failed"
+
+
+async def test_a_storage_refusal_says_why(world):
+    """Azure names the reason in a header; a bare status code leaves the user guessing."""
+    world.blob.status = 404
+    world.blob.error_code = "ContainerNotFound"
+
+    with pytest.raises(CloudError, match="404 ContainerNotFound"):
+        await world.index.upload(ChunkUpload(project_id=PROJECT_PATH, changed_paths=["a.py"]))
 
 
 # ── Job progress ─────────────────────────────────────────────────────────────

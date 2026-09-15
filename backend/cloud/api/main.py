@@ -31,12 +31,14 @@ def create_app(services: Services | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         if services is not None:
+            await services.start()
             yield
             return
         settings = ApiSettings()
         configure_logging(log_format=settings.log_format, level=settings.log_level)
         built = build_services(settings)
         app.state.services = built
+        await built.start()
         try:
             yield
         finally:

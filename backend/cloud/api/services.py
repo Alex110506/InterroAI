@@ -7,6 +7,7 @@ thing from `ApiSettings` when it starts and closes it when it stops.
 """
 from __future__ import annotations
 
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -33,6 +34,8 @@ from core.models import llm
 from core.models.gateway import ModelGateway, OpenAIGateway
 
 CALLBACK_PATH = "/auth/github/callback"
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -65,6 +68,24 @@ class Services:
     #: Sign-in cookies are marked Secure whenever the API is served over https.
     secure_cookies: bool = False
     closers: list[Callable[[], Awaitable[None]]] = field(default_factory=list)
+    #: Run as the app starts, to get backing services ready: creating the upload
+    #: container, which a fresh local stack does not have.
+    startup: list[Callable[[], Awaitable[None]]] = field(default_factory=list)
+
+    async def start(self) -> None:
+        """
+        Run the startup steps.
+
+        A step that fails is logged, not fatal: with storage down, sign-in and
+        everything else should still work, and the upload that needed storage
+        fails with its own error.
+        """
+        for step in self.startup:
+            try:
+                await step()
+            except Exception:  # noqa: BLE001
+                name = getattr(step, "__qualname__", repr(step))
+                logger.warning("A startup step failed (%s); starting anyway", name, exc_info=True)
 
     async def close(self) -> None:
         for close in reversed(self.closers):
@@ -147,4 +168,7 @@ def build_services(settings: ApiSettings) -> Services:
         ),
         secure_cookies=public_url.startswith("https://"),
         closers=[engine.dispose, http.aclose, uploads.close, queue.close, notifications.close],
+        # Upload URLs point into this container, so it has to exist before the
+        # first one is used. In Azure it already does, and this does nothing.
+        startup=[uploads.ensure_container],
     )
