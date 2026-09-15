@@ -27,10 +27,10 @@ from typing import Annotated, Any
 
 import anyio
 import openai
-from fastapi import APIRouter, Body, Response
+from fastapi import APIRouter, Body, Depends, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from cloud.api.deps import CurrentUser, ServicesDep, api_error, charge_request
+from cloud.api.deps import ServicesDep, api_error, charge_request, rate_limit
 from cloud.api.services import Services
 from cloud.api.tokens import AccessClaims
 from core.errors import MissingAPIKeyError
@@ -39,6 +39,8 @@ from core.models.gateway import LONG_TIMEOUT
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["llm"])
+
+ChatUser = Annotated[AccessClaims, Depends(rate_limit("chat"))]
 
 #: Everything the agents send, and nothing that changes who pays or where data goes.
 ALLOWED_PARAMETERS = frozenset(
@@ -64,7 +66,7 @@ _STREAM_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
 
 @router.post("/llm/chat")
 async def chat(
-    body: Annotated[dict[str, Any], Body()], user: CurrentUser, services: ServicesDep
+    body: Annotated[dict[str, Any], Body()], user: ChatUser, services: ServicesDep
 ) -> Response:
     model = body.get("model")
     if model not in services.limits.chat_models:

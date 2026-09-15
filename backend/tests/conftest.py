@@ -357,6 +357,17 @@ _CLOUD_TABLES = (
 )
 
 
+def _stack_unavailable(reason: str) -> None:
+    """
+    Skip for a developer who has not started the stack; fail where it was set up
+    on purpose (CI sets INTERROAI_REQUIRE_STACK=1), so a broken stack cannot turn
+    every integration test into a silent skip.
+    """
+    if os.environ.get("INTERROAI_REQUIRE_STACK") == "1":
+        pytest.fail(reason, pytrace=False)
+    pytest.skip(reason)
+
+
 @pytest.fixture(scope="session")
 def stack_settings():
     """Whatever of the stack's coordinates `.env` provides; each fixture checks its own."""
@@ -383,7 +394,7 @@ def database_urls(stack_settings):
     from sqlalchemy.engine import make_url
 
     if not (stack_settings.database_url and stack_settings.migrations_database_url):
-        pytest.skip("INTERROAI_DATABASE_URL / INTERROAI_MIGRATIONS_DATABASE_URL are not set")
+        _stack_unavailable("INTERROAI_DATABASE_URL / INTERROAI_MIGRATIONS_DATABASE_URL are not set")
 
     def on_test_database(url: str) -> str:
         return make_url(url).set(database=_TEST_DATABASE).render_as_string(hide_password=False)
@@ -402,7 +413,7 @@ async def blob_uploads(stack_settings):
     from cloud.adapters.blob_uploads import BlobUploadStore
 
     if not stack_settings.blob_connection_string:
-        pytest.skip("INTERROAI_BLOB_CONNECTION_STRING is not set")
+        _stack_unavailable("INTERROAI_BLOB_CONNECTION_STRING is not set")
     store = BlobUploadStore.from_connection_string(
         stack_settings.blob_connection_string, "interroai-test-uploads"
     )
@@ -410,7 +421,7 @@ async def blob_uploads(stack_settings):
         await store.ensure_container()
     except ServiceRequestError as exc:
         await store.close()
-        pytest.skip(f"Azurite is not reachable ({exc}); run `docker compose up -d`.")
+        _stack_unavailable(f"Azurite is not reachable ({exc}); run `docker compose up -d`.")
     yield store
     await store.close()
 
@@ -437,7 +448,7 @@ async def service_bus_queue(stack_settings):
                     for message in messages:
                         await receiver.complete_message(message)
     except (ServiceBusError, OSError) as exc:
-        pytest.skip(f"The Service Bus emulator is not reachable ({exc}).")
+        _stack_unavailable(f"The Service Bus emulator is not reachable ({exc}).")
 
     queue = ServiceBusJobQueue.from_connection_string(connection_string, queue_name)
     yield queue
@@ -456,7 +467,7 @@ def migrated_database(database_urls):
     try:
         command.downgrade(config, "base")
     except OSError as exc:
-        pytest.skip(f"The local stack is not reachable ({exc}); run `docker compose up -d`.")
+        _stack_unavailable(f"The local stack is not reachable ({exc}); run `docker compose up -d`.")
     command.upgrade(config, "head")
 
 

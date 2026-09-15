@@ -85,6 +85,8 @@ class FakeApi:
             return _refusal(503, "llm_unavailable")
         if path == "/refused":
             return _refusal(400, "model_not_allowed")
+        if path == "/burst":
+            return _refusal(429, "rate_limited")
         return httpx.Response(200, json={"ok": True})
 
 
@@ -244,6 +246,16 @@ async def test_an_unreachable_api_is_cloud_unavailable(session, api):
 
     with pytest.raises(CloudUnavailableError):
         await session.request("GET", "/things")
+
+
+async def test_a_rate_limit_is_not_mistaken_for_the_daily_quota(session):
+    await _sign_in(session)
+
+    with pytest.raises(CloudError) as raised:
+        await session.request("GET", "/burst")
+
+    assert raised.value.code == "rate_limited"
+    assert not isinstance(raised.value, QuotaExceededError)
 
 
 async def test_a_stream_is_handed_over_only_once_its_status_is_good(session, api):

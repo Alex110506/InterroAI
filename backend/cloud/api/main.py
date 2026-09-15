@@ -19,7 +19,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from cloud.api import auth, indexing, llm_gateway, projects
+from cloud.api.middleware import RequestContextMiddleware
 from cloud.api.services import Services, build_services
+from cloud.observability import configure_logging
 from cloud.settings import ApiSettings
 
 VERSION = "0.1.0"
@@ -31,7 +33,9 @@ def create_app(services: Services | None = None) -> FastAPI:
         if services is not None:
             yield
             return
-        built = build_services(ApiSettings())
+        settings = ApiSettings()
+        configure_logging(log_format=settings.log_format, level=settings.log_level)
+        built = build_services(settings)
         app.state.services = built
         try:
             yield
@@ -41,6 +45,7 @@ def create_app(services: Services | None = None) -> FastAPI:
     app = FastAPI(title="InterroAI Cloud API", version=VERSION, lifespan=lifespan)
     if services is not None:
         app.state.services = services
+    app.add_middleware(RequestContextMiddleware)
 
     app.include_router(auth.router)
     app.include_router(projects.router)

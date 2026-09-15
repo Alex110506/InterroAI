@@ -243,6 +243,9 @@ def cloud_error(response: httpx.Response) -> CloudError:
     if response.status_code == 401:
         return NotSignedInError()
     if response.status_code == 429:
+        if code == "rate_limited":
+            # A burst, not the day's allowance: worth retrying in a moment.
+            return CloudError(message, code=code, details=detail)
         return QuotaExceededError(message, details=detail)
     if response.status_code >= 500:
         return CloudUnavailableError(message, code=code, details=detail)

@@ -20,6 +20,7 @@ from cloud.adapters.service_bus import ServiceBusJobQueue
 from cloud.api.github import GitHubOAuth
 from cloud.api.job_events import JobNotifications, asyncpg_dsn
 from cloud.api.signin import SignInService
+from cloud.api.throttle import RateLimiter, RateLimits
 from cloud.api.tokens import TokenSigner
 from cloud.db.accounts import Accounts, PostgresAccounts
 from cloud.db.projects import ProjectRepository
@@ -37,9 +38,11 @@ CALLBACK_PATH = "/auth/github/callback"
 @dataclass(frozen=True)
 class Limits:
     max_upload_bytes: int = 25_000_000
+    max_request_bytes: int = 8_000_000
     upload_url_ttl: timedelta = timedelta(minutes=15)
     sse_heartbeat_seconds: float = 15.0
     quota: Quota = Quota(requests=500, tokens=200_000)
+    rates: RateLimits = RateLimits()
     chat_models: frozenset[str] = frozenset({"gpt-5.4-mini", "gpt-5.4", "gpt-5.5"})
 
 
@@ -58,6 +61,7 @@ class Services:
     gateway: ModelGateway | None = None
     notifications: JobNotifications = field(default_factory=lambda: JobNotifications(None))
     limits: Limits = field(default_factory=Limits)
+    limiter: RateLimiter = field(default_factory=RateLimiter)
     #: Sign-in cookies are marked Secure whenever the API is served over https.
     secure_cookies: bool = False
     closers: list[Callable[[], Awaitable[None]]] = field(default_factory=list)
@@ -128,9 +132,17 @@ def build_services(settings: ApiSettings) -> Services:
         notifications=notifications,
         limits=Limits(
             max_upload_bytes=settings.max_upload_bytes,
+            max_request_bytes=settings.max_request_bytes,
             upload_url_ttl=timedelta(seconds=settings.upload_url_ttl_seconds),
             sse_heartbeat_seconds=settings.sse_heartbeat_seconds,
             quota=Quota(requests=settings.daily_request_quota, tokens=settings.daily_token_quota),
+            rates=RateLimits(
+                sign_in=settings.sign_in_per_minute,
+                chat=settings.chat_per_minute,
+                search=settings.search_per_minute,
+                sync=settings.sync_per_minute,
+                uploads=settings.uploads_per_minute,
+            ),
             chat_models=settings.chat_model_allowlist,
         ),
         secure_cookies=public_url.startswith("https://"),

@@ -12,6 +12,8 @@ business holding the GitHub client secret or the JWT signing key.
 """
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -56,6 +58,11 @@ class WorkerSettings(BaseSettings):
 
     openai_api_key: SecretStr
 
+    #: "json" in the images, one object per line for Log Analytics; "text" reads
+    #: better in a terminal.
+    log_format: Literal["text", "json"] = "text"
+    log_level: str = "INFO"
+
 
 class ApiSettings(WorkerSettings):
     """The worker's settings plus sign-in, tokens and quotas."""
@@ -83,6 +90,18 @@ class ApiSettings(WorkerSettings):
     upload_url_ttl_seconds: int = 15 * 60
     #: Idle time after which a job's event stream sends a keep-alive comment.
     sse_heartbeat_seconds: float = 15.0
+
+    #: The largest request body accepted. The biggest legitimate one is a sync
+    #: manifest, a path and a hash per file; chunks go to Blob Storage instead.
+    max_request_bytes: int = 8_000_000
+
+    #: Per-minute rate limits (cloud/api/throttle.py). Sign-in is counted per
+    #: client address, since nobody is signed in yet; the rest per user.
+    sign_in_per_minute: int = 30
+    chat_per_minute: int = 60
+    search_per_minute: int = 120
+    sync_per_minute: int = 30
+    uploads_per_minute: int = 30
 
     @property
     def chat_model_allowlist(self) -> frozenset[str]:

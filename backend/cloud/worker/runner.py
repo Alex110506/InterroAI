@@ -26,6 +26,7 @@ import contextlib
 import logging
 from typing import Protocol
 
+from cloud import observability
 from contracts.indexing import IndexEvent
 from core.index.indexer import run_job
 from core.index.ports import (
@@ -98,6 +99,8 @@ class JobRunner:
 
     async def handle(self, delivery: Delivery) -> None:
         job_id = delivery.message.job_id
+        # Every log line written while this job runs carries its id.
+        context = observability.job_id.set(job_id)
         try:
             await self._process(delivery)
         except Exception as exc:  # noqa: BLE001
@@ -111,6 +114,8 @@ class JobRunner:
                 await self._give_up(delivery, f"Indexing kept failing: {exc}")
             else:
                 await delivery.abandon()
+        finally:
+            observability.job_id.reset(context)
 
     async def _process(self, delivery: Delivery) -> None:
         message = delivery.message

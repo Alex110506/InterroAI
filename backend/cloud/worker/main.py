@@ -20,6 +20,7 @@ from cloud.adapters.postgres_store import PostgresChunkStore
 from cloud.adapters.service_bus import ServiceBusJobQueue
 from cloud.db.jobs import JobRepository
 from cloud.db.session import create_engine, create_session_factory, service_scope
+from cloud.observability import configure_logging
 from cloud.settings import WorkerSettings
 from cloud.worker.runner import JobRunner
 from core.models import llm
@@ -70,7 +71,6 @@ async def run_worker(settings: WorkerSettings) -> None:
 
 
 def main() -> None:
-    logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
-    )
-    asyncio.run(run_worker(WorkerSettings()))
+    settings = WorkerSettings()
+    configure_logging(log_format=settings.log_format, level=settings.log_level)
+    asyncio.run(run_worker(settings))

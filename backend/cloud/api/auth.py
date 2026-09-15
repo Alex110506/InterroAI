@@ -10,11 +10,11 @@ from __future__ import annotations
 import html
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Cookie, HTTPException, Response
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, ConfigDict
 
-from cloud.api.deps import CurrentUser, ServicesDep, unauthorized
+from cloud.api.deps import CurrentUser, ServicesDep, rate_limit_by_address, unauthorized
 from cloud.api.services import CALLBACK_PATH
 from cloud.api.signin import SIGNIN_TTL, SignInError
 
@@ -22,6 +22,8 @@ router = APIRouter(tags=["auth"])
 
 _NONCE_COOKIE = "interroai_signin"
 _COOKIE_PATH = "/auth/github"
+#: Nobody is signed in yet on these routes, so they are counted per client address.
+_SIGN_IN_RATE = [Depends(rate_limit_by_address("sign_in"))]
 
 
 class TokenRequest(BaseModel):
@@ -52,7 +54,7 @@ class MeResponse(BaseModel):
     avatar_url: str | None
 
 
-@router.get("/auth/github/start")
+@router.get("/auth/github/start", dependencies=_SIGN_IN_RATE)
 async def start_sign_in(
     services: ServicesDep,
     redirect_uri: str,
@@ -84,7 +86,7 @@ async def start_sign_in(
     return response
 
 
-@router.get(CALLBACK_PATH)
+@router.get(CALLBACK_PATH, dependencies=_SIGN_IN_RATE)
 async def finish_sign_in(
     services: ServicesDep,
     browser_nonce: Annotated[str | None, Cookie(alias=_NONCE_COOKIE)] = None,
@@ -104,7 +106,7 @@ async def finish_sign_in(
     return response
 
 
-@router.post("/auth/token")
+@router.post("/auth/token", dependencies=_SIGN_IN_RATE)
 async def issue_tokens(
     body: TokenRequest, services: ServicesDep, response: Response
 ) -> TokenResponse:

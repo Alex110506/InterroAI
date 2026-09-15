@@ -1,0 +1,19 @@
+# The images need contracts/, core/, cloud/ and requirements-cloud.lock.
+# Everything else stays out of the build context.
+**/__pycache__
+**/*.py[cod]
+.venv
+venv
+.pytest_cache
+.ruff_cache
+.coverage
+htmlcov
+*.egg-info
+tests
+agents
+api
+main.py
+config.py
+requirements.lock
+chroma_db
+.env

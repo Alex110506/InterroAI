@@ -20,12 +20,12 @@ import uuid
 from datetime import UTC, datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Header, status
+from fastapi import APIRouter, Depends, Header, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict
 
 from cloud.adapters.postgres_store import PostgresChunkStore
-from cloud.api.deps import CurrentUser, ServicesDep, api_error, charge_request
+from cloud.api.deps import CurrentUser, ServicesDep, api_error, charge_request, rate_limit
 from cloud.api.job_events import job_event_stream
 from cloud.api.llm_gateway import upstream_errors
 from cloud.api.services import Services
@@ -44,6 +44,10 @@ from core.index.manifest_diff import diff_manifest
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["index"])
+
+SyncUser = Annotated[AccessClaims, Depends(rate_limit("sync"))]
+UploadUser = Annotated[AccessClaims, Depends(rate_limit("uploads"))]
+SearchUser = Annotated[AccessClaims, Depends(rate_limit("search"))]
 
 #: The shape `grant_upload` hands out: the project's prefix, then a random name.
 _UPLOAD_REF = re.compile(r"projects/[0-9a-f-]{36}/[0-9a-f]{32}\.json")
@@ -81,7 +85,7 @@ class JobStatus(BaseModel):
 
 @router.post("/projects/{project_id}/sync")
 async def sync(
-    project_id: uuid.UUID, body: SyncRequest, user: CurrentUser, services: ServicesDep
+    project_id: uuid.UUID, body: SyncRequest, user: SyncUser, services: ServicesDep
 ) -> SyncResult:
     project = await _owned_project(services, user, project_id, named_in_body=body.project_id)
     indexed = {} if body.force else await PostgresChunkStore(_scope(services, user)).manifest(
@@ -99,7 +103,7 @@ async def sync(
 
 @router.post("/projects/{project_id}/uploads", status_code=status.HTTP_201_CREATED)
 async def grant_upload(
-    project_id: uuid.UUID, user: CurrentUser, services: ServicesDep
+    project_id: uuid.UUID, user: UploadUser, services: ServicesDep
 ) -> UploadGrant:
     project = await _owned_project(services, user, project_id)
     upload_ref = f"projects/{project}/{uuid.uuid4().hex}.json"
@@ -114,7 +118,7 @@ async def grant_upload(
 
 @router.post("/projects/{project_id}/jobs", status_code=status.HTTP_202_ACCEPTED)
 async def create_job(
-    project_id: uuid.UUID, body: JobCreate, user: CurrentUser, services: ServicesDep
+    project_id: uuid.UUID, body: JobCreate, user: UploadUser, services: ServicesDep
 ) -> JobAccepted:
     project = await _owned_project(services, user, project_id)
     upload_ref = body.upload_ref
@@ -206,7 +210,7 @@ async def job_events(
 
 @router.post("/projects/{project_id}/search")
 async def search(
-    project_id: uuid.UUID, body: SearchRequest, user: CurrentUser, services: ServicesDep
+    project_id: uuid.UUID, body: SearchRequest, user: SearchUser, services: ServicesDep
 ) -> list[SearchHit]:
     project = await _owned_project(services, user, project_id, named_in_body=body.project_id)
     if not body.query.strip():
