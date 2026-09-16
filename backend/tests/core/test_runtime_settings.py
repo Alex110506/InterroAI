@@ -1,31 +1,19 @@
-"""Runtime settings: which build the process is."""
+"""Runtime settings: where the Cloud API is, and how the app locks the runtime down."""
 from __future__ import annotations
 
 import pytest
-from pydantic import ValidationError
 
-from core.settings import RuntimeSettings, get_runtime_settings
-
-
-def test_the_default_build_is_fully_local(monkeypatch):
-    monkeypatch.delenv("INTERROAI_MODE", raising=False)
-    assert RuntimeSettings(_env_file=None).mode == "local"
+from core.settings import RuntimeSettings
 
 
-def test_the_mode_comes_from_the_environment(monkeypatch):
-    monkeypatch.setenv("INTERROAI_MODE", "cloud")
-    assert RuntimeSettings(_env_file=None).mode == "cloud"
+def test_the_api_url_defaults_to_the_local_stack(monkeypatch):
+    monkeypatch.delenv("INTERROAI_API_URL", raising=False)
+    assert RuntimeSettings(_env_file=None).api_url == "http://localhost:8080"
 
 
-def test_an_unknown_mode_is_rejected(monkeypatch):
-    monkeypatch.setenv("INTERROAI_MODE", "hybrid")
-    with pytest.raises(ValidationError):
-        RuntimeSettings(_env_file=None)
-
-
-def test_the_test_suite_always_runs_the_local_build():
-    """`conftest.py` pins it, so a developer's `.env` cannot reroute the suite."""
-    assert get_runtime_settings().mode == "local"
+def test_the_api_url_comes_from_the_environment(monkeypatch):
+    monkeypatch.setenv("INTERROAI_API_URL", "https://api.interroai.example")
+    assert RuntimeSettings(_env_file=None).api_url == "https://api.interroai.example"
 
 
 def test_the_launch_token_comes_from_the_app_and_is_never_printed(monkeypatch):

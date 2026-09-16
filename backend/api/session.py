@@ -1,7 +1,7 @@
 """
 The runtime's cloud session, for the Electron app.
 
-  GET    /api/session   which mode this runtime is in, and who is signed in
+  GET    /api/session   where the Cloud API is, and who is signed in
   PUT    /api/session   finish signing in with the login code and PKCE verifier
                         the app's browser leg received
   DELETE /api/session   sign out
@@ -12,21 +12,17 @@ pass through the app.
 """
 from __future__ import annotations
 
-from typing import Literal
-
 from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel, ConfigDict
 
 from core import providers
 from core.errors import CloudError, CloudUnavailableError, NotSignedInError
-from core.settings import get_runtime_settings
 
 router = APIRouter(prefix="/api/session", tags=["session"])
 
 
 class SessionState(BaseModel):
-    mode: Literal["local", "cloud"]
-    api_url: str | None = None
+    api_url: str
     signed_in: bool = False
     login: str | None = None
     avatar_url: str | None = None
@@ -41,10 +37,8 @@ class SignInRequest(BaseModel):
 
 @router.get("")
 async def get_session() -> SessionState:
-    if get_runtime_settings().mode != "cloud":
-        return SessionState(mode="local")
     session = providers.cloud_session()
-    state = SessionState(mode="cloud", api_url=session.api_url)
+    state = SessionState(api_url=session.api_url)
     if not session.signed_in:
         return state
     try:
@@ -61,14 +55,13 @@ async def get_session() -> SessionState:
 
 @router.put("")
 async def sign_in(body: SignInRequest) -> SessionState:
-    session = _cloud_session()
+    session = providers.cloud_session()
     try:
         identity = await session.sign_in(code=body.code, code_verifier=body.code_verifier)
     except CloudError as exc:
         status = 503 if isinstance(exc, CloudUnavailableError) else 400
         raise HTTPException(status, detail={"code": exc.code, "message": str(exc)}) from None
     return SessionState(
-        mode="cloud",
         api_url=session.api_url,
         signed_in=True,
         login=identity.login,
@@ -78,17 +71,5 @@ async def sign_in(body: SignInRequest) -> SessionState:
 
 @router.delete("", status_code=204)
 async def sign_out() -> Response:
-    await _cloud_session().sign_out()
+    await providers.cloud_session().sign_out()
     return Response(status_code=204)
-
-
-def _cloud_session():
-    if get_runtime_settings().mode != "cloud":
-        raise HTTPException(
-            409,
-            detail={
-                "code": "local_mode",
-                "message": "This runtime is not using the InterroAI cloud.",
-            },
-        )
-    return providers.cloud_session()

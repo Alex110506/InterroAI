@@ -53,11 +53,14 @@ def test_terminal_errors_are_not_tool_errors(error_cls):
     assert not issubclass(error_cls, ToolError)
 
 
-def test_missing_api_key_has_actionable_default_message():
-    """The message is shown to the user verbatim, so it must name the fix."""
+def test_missing_api_key_names_the_platform_key():
+    """
+    Only the cloud processes hold a model key, so this is an operator's
+    misconfiguration — not something a user can fix in Settings.
+    """
     message = str(MissingAPIKeyError())
     assert "API key" in message
-    assert "Settings" in message
+    assert "cloud" in message
 
 
 def test_missing_api_key_accepts_a_custom_message():

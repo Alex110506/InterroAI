@@ -67,10 +67,10 @@ export const api = {
 
   getSettings: () => request('/api/settings'),
 
-  saveSettings: ({ name, apiKey }) =>
+  saveSettings: ({ name }) =>
     request('/api/settings', {
       method: 'POST',
-      body: JSON.stringify({ name, apiKey }),
+      body: JSON.stringify({ name }),
     }),
 
   getSession: () => request('/api/session'),

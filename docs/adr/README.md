@@ -14,3 +14,4 @@ The architecture itself is drawn in [`../azure-architecture.svg`](../azure-archi
 | [0006](0006-github-identity-pkce-and-rotating-refresh-tokens.md) | GitHub for identity only, PKCE through a loopback redirect, rotating refresh tokens |
 | [0007](0007-a-launch-token-for-the-local-runtime.md) | The local runtime answers only the app that started it |
 | [0008](0008-in-process-rate-limits-without-redis.md) | Exact daily quotas in Postgres; approximate rate limits in memory, no Redis |
+| [0009](0009-one-architecture-not-two.md) | The local-only mode is removed; everything but the user's files goes through the Cloud API |

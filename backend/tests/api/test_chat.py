@@ -74,13 +74,15 @@ def test_the_default_model_is_a_known_id():
     assert chat._DEFAULT_MODEL in session.AVAILABLE_MODELS
 
 
-def test_a_missing_key_reaches_the_user_as_a_clear_error(client, without_api_key):
+def test_being_signed_out_reaches_the_user_as_a_clear_error(client):
     """
-    End-to-end, through the real default gateway: the typed error raised deep
-    in `core.models.llm` survives the session and the WebSocket handler intact.
+    End-to-end, through the real default gateway: the typed error raised in
+    `core.remote.session` survives the session and the WebSocket handler
+    intact — code and all, since the frontend routes on it back to sign-in.
     """
     with client.websocket_connect("/api/chat/ws") as ws:
         ws.send_json(_start(model="gpt-5.6-sol"))
         event = ws.receive_json()
     assert event["type"] == "error"
-    assert "API key" in event["message"]
+    assert "Sign in" in event["message"]
+    assert event["code"] == "not_signed_in"

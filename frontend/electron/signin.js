@@ -108,9 +108,6 @@ function waitForCallback(server, { state, timeoutMs, signal }) {
 async function signIn({ runtime, openExternal, fetchImpl = fetch, timeoutMs = TIMEOUT_MS, signal } = {}) {
   const headers = { 'Content-Type': 'application/json', 'X-Interroai-Token': runtime.token }
   const session = await (await fetchImpl(`${runtime.baseUrl}/api/session`, { headers })).json()
-  if (session.mode !== 'cloud') {
-    throw new SignInError('local_mode', 'This runtime is not using the InterroAI cloud.')
-  }
 
   const { verifier, challenge } = pkcePair()
   const state = base64url(crypto.randomBytes(16))

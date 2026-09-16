@@ -1,4 +1,4 @@
-"""The runtime's `/api/session` routes, in local mode and in cloud mode."""
+"""The runtime's `/api/session` routes: where the Cloud API is, and who is signed in."""
 from __future__ import annotations
 
 import json
@@ -45,42 +45,14 @@ def client():
 
 
 @pytest.fixture
-def cloud(monkeypatch, cloud_mode, fake_keyring):
+def cloud(monkeypatch, cloud_api, fake_keyring):
     session = CloudSession(API, transport=httpx.MockTransport(_fake_cloud_api))
     monkeypatch.setattr(providers, "cloud_session", lambda: session)
     return session
 
 
-# ── Local mode ───────────────────────────────────────────────────────────────
-
-
-def test_a_local_runtime_says_so(client):
+def test_a_runtime_starts_signed_out(client, cloud):
     assert client.get("/api/session").json() == {
-        "mode": "local",
-        "api_url": None,
-        "signed_in": False,
-        "login": None,
-        "avatar_url": None,
-    }
-
-
-def test_signing_in_is_refused_in_local_mode(client):
-    response = client.put("/api/session", json={"code": "good-code", "code_verifier": VERIFIER})
-
-    assert response.status_code == 409
-    assert response.json()["detail"]["code"] == "local_mode"
-
-
-def test_the_settings_report_local_mode(client, fake_keyring):
-    assert client.get("/api/settings").json()["mode"] == "local"
-
-
-# ── Cloud mode ───────────────────────────────────────────────────────────────
-
-
-def test_a_cloud_runtime_starts_signed_out(client, cloud):
-    assert client.get("/api/session").json() == {
-        "mode": "cloud",
         "api_url": API,
         "signed_in": False,
         "login": None,
@@ -110,7 +82,3 @@ def test_signing_out_forgets_the_session(client, cloud):
 
     assert client.delete("/api/session").status_code == 204
     assert client.get("/api/session").json()["signed_in"] is False
-
-
-def test_the_settings_report_cloud_mode(client, cloud):
-    assert client.get("/api/settings").json()["mode"] == "cloud"

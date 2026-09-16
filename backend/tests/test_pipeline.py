@@ -9,14 +9,14 @@ from __future__ import annotations
 
 import pytest
 from conftest import FakeGateway, make_response
+from fakes.index import InProcessIndex
 from fastapi.testclient import TestClient
 
 import agents.session as session
-import core.index.adapters.chroma as chroma
 import core.index.indexer as indexer
-import core.index.semantic_index as semantic_index
 import core.workspace.project_index as project_index
 from agents.coder import CoderAgent
+from core import providers
 from core.index.embeddings import EmbeddedBatch
 from main import app
 
@@ -128,7 +128,13 @@ def test_the_project_path_reaches_the_supervisor(client, monkeypatch, captured_s
 
 @pytest.fixture
 def stub_embedding(monkeypatch):
-    stored = {}
+    """
+    The indexing service, in this process, behind the port the routes resolve.
+
+    Returns the index itself, so a test can ask what was uploaded and what ended
+    up stored.
+    """
+    index = InProcessIndex()
 
     async def fake_batches(texts, **kwargs):
         yield EmbeddedBatch(
@@ -136,13 +142,9 @@ def stub_embedding(monkeypatch):
             vectors=[[0.1] * 4 for _ in texts],
         )
 
-    def fake_store(path, chunks, embeddings):
-        stored["path"] = path
-        stored.setdefault("chunks", []).extend(chunks)
-
     monkeypatch.setattr(indexer, "embed_batches", fake_batches)
-    monkeypatch.setattr(chroma, "store_chunks", fake_store)
-    return stored
+    monkeypatch.setattr(providers, "semantic_index", lambda: index)
+    return index
 
 
 def _drain_steps(ws):
@@ -181,8 +183,9 @@ def test_indexing_persists_the_chunks(client, tmp_project, stub_embedding):
         ws.send_json({"path": str(tmp_project)})
         _drain_steps(ws)
 
-    assert stub_embedding["path"] == str(tmp_project.resolve())
-    assert stub_embedding["chunks"]
+    assert [upload.project_id for upload in stub_embedding.uploads] == [str(tmp_project.resolve())]
+    assert stub_embedding.uploads[0].chunks
+    assert len(stub_embedding.store) > 0
 
 
 def test_indexing_reports_embedding_progress(client, tmp_project, stub_embedding):
@@ -209,10 +212,13 @@ def test_an_empty_project_finishes_without_embedding(client, tmp_path, stub_embe
         events = _drain_steps(ws)
 
     assert events[-1]["step"] == "done"
-    assert "path" not in stub_embedding, "nothing should have been stored"
+    assert stub_embedding.uploads == [], "no job should have been queued"
+    assert len(stub_embedding.store) == 0, "nothing should have been stored"
 
 
-def test_an_indexing_failure_is_reported_and_logged(client, tmp_project, monkeypatch, caplog):
+def test_an_indexing_failure_is_reported_and_logged(
+    client, tmp_project, stub_embedding, monkeypatch, caplog
+):
     async def boom(texts, **kwargs):
         raise RuntimeError("provider exploded")
         yield  # pragma: no cover — makes this an async generator
@@ -228,13 +234,11 @@ def test_an_indexing_failure_is_reported_and_logged(client, tmp_project, monkeyp
     assert any(r.exc_info for r in caplog.records), "the traceback must be kept"
 
 
-async def test_a_search_after_indexing_reads_the_code_back_from_disk(
-    tmp_project, isolated_chroma, monkeypatch
-):
+async def test_a_search_after_indexing_reads_the_code_back_from_disk(tmp_project, monkeypatch):
     """
-    The whole of design B in one pass: index the project through the real
-    local index, then search it through the real agent. The index stored no
-    text, so every line of code in the result was read from the working tree.
+    The whole of design B in one pass: index the project through a real index,
+    then search it through the real agent. The index stored no text, so every
+    line of code in the result was read from the working tree.
     """
     vector = [0.1, 0.2, 0.3, 0.4]
 
@@ -245,12 +249,13 @@ async def test_a_search_after_indexing_reads_the_code_back_from_disk(
         return [vector for _ in texts]
 
     monkeypatch.setattr(indexer, "embed_batches", fake_batches)
-    monkeypatch.setattr(semantic_index, "embed_texts", fake_query)
+    index = InProcessIndex(embed=fake_query)
 
-    events = [e async for e in project_index.embed_project(tmp_project)]
+    events = [e async for e in project_index.embed_project(tmp_project, index=index)]
     assert events[-1]["step"] == "done"
 
-    out = await CoderAgent(str(tmp_project), "gpt-5.6-sol")._search_semantic("greeting", n=10)
+    agent = CoderAgent(str(tmp_project), "gpt-5.6-sol", index=index)
+    out = await agent._search_semantic("greeting", n=10)
     assert "class Greeter" in out
     assert "stale" not in out
 

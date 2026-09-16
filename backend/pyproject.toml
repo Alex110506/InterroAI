@@ -26,11 +26,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# What only the desktop runtime needs: the local index, the chunker and the
-# optional cache. The cloud images never install these, and
+# What only the desktop runtime needs: the chunker, .gitignore matching and the
+# optional repo-map cache. The cloud images never install these, and
 # tests/test_dependency_split.py fails if cloud code starts to need them.
 runtime = [
-    "chromadb>=0.5.0",
     "pathspec>=0.12.0",
     "langchain-text-splitters>=0.2.0",
     "redis>=5.0.0",

@@ -3,7 +3,7 @@ The worker's loop, with in-memory stand-ins for the queue, uploads and job rows.
 
 What is under test is the settlement logic — which outcome completes, abandons
 or dead-letters a message — and what the job row ends up saying. Embeddings are
-faked, and the store is a throwaway Chroma.
+faked, and the store is the in-memory one.
 """
 from __future__ import annotations
 
@@ -16,8 +16,8 @@ import core.index.indexer as indexer
 from cloud.db.jobs import JobRecord
 from cloud.worker.runner import JobRunner
 from contracts.indexing import Chunk, ChunkUpload, IndexJobMessage
-from core.index.adapters.chroma import ChromaChunkStore, stored_manifest
 from core.index.adapters.memory import (
+    InMemoryChunkStore,
     InMemoryEmbeddingCache,
     InMemoryJobQueue,
     InMemoryUploadStore,
@@ -85,20 +85,26 @@ def embedded(monkeypatch):
 
 
 @pytest.fixture
-def world(tmp_path, isolated_chroma, embedded):
+def world(tmp_path, embedded):
     jobs = FakeJobs()
     queue = InMemoryJobQueue(max_delivery_count=MAX_DELIVERIES)
     uploads = InMemoryUploadStore()
+    store = InMemoryChunkStore()
     runner = JobRunner(
         queue=queue,
         uploads=uploads,
-        store=ChromaChunkStore(),
+        store=store,
         cache=InMemoryEmbeddingCache(),
         jobs=jobs,
         max_delivery_count=MAX_DELIVERIES,
     )
     return SimpleNamespace(
-        jobs=jobs, queue=queue, uploads=uploads, runner=runner, project=str(tmp_path / "proj")
+        jobs=jobs,
+        queue=queue,
+        uploads=uploads,
+        store=store,
+        runner=runner,
+        project=str(tmp_path / "proj"),
     )
 
 
@@ -137,7 +143,7 @@ async def test_a_job_runs_to_done_and_its_message_is_completed(world):
 
     row = world.jobs.rows["job-1"]
     assert row["status"] == "done"
-    assert "a.py" in stored_manifest(world.project)
+    assert "a.py" in await world.store.manifest(world.project)
     assert len(world.uploads) == 0, "the upload is deleted once its job has run"
     assert await _queue_is_empty(world.queue)
     assert world.queue.dead_letters == []
@@ -228,7 +234,7 @@ async def test_an_unusable_upload_is_given_up_at_once(world):
     runner = JobRunner(
         queue=world.queue,
         uploads=RefusingUploads(),
-        store=ChromaChunkStore(),
+        store=InMemoryChunkStore(),
         cache=None,
         jobs=world.jobs,
         max_delivery_count=MAX_DELIVERIES,

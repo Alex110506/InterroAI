@@ -34,8 +34,10 @@ This is the split desktop coding agents such as Cursor use.
 
 - Only chunks of changed files leave the machine, and only to be embedded
   ([ADR 0002](0002-no-source-text-in-the-index.md)).
-- The runtime still works without the cloud. Both modes sit behind the same ports
-  (`ModelGateway`, `SemanticIndex`), and `core/providers.py` picks one from
-  `INTERROAI_MODE`.
+- Everything that is not the user's files sits behind two ports (`ModelGateway`,
+  `SemanticIndex`), and `core/providers.py` is the only place that names an
+  implementation. The runtime also shipped a second, fully local implementation
+  of both for a while; [ADR 0009](0009-one-architecture-not-two.md) records why
+  that was removed.
 - A local process now holds a cloud session, so it has to be protected from
   other local processes ([ADR 0007](0007-a-launch-token-for-the-local-runtime.md)).
