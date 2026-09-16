@@ -29,25 +29,14 @@ async def stream(
     intent: str = "implement",
     history: list[dict] | None = None,
     gateway: ModelGateway | None = None,
-    effort: str | None = None,
 ) -> AsyncIterator[dict]:
     """Run the Coding Agent, yielding each of its events in order."""
     from agents.coder import CoderAgent
 
-    logger.info(
-        "Task starting | model=%r | effort=%r | project=%r",
-        model,
-        effort,
-        Path(project_path).name,
-    )
+    logger.info("Task starting | model=%r | project=%r", model, Path(project_path).name)
 
     agent = CoderAgent(
-        project_path=project_path,
-        model=model,
-        intent=intent,
-        history=history,
-        gateway=gateway,
-        effort=effort,
+        project_path=project_path, model=model, intent=intent, history=history, gateway=gateway
     )
     async for event in agent.execute(prompt):
         logger.info("coder event: %s", event.get("type"))
@@ -64,17 +53,10 @@ async def run(
     intent: str = "implement",
     history: list[dict] | None = None,
     gateway: ModelGateway | None = None,
-    effort: str | None = None,
 ) -> None:
     """Drive `stream()` and relay every event over *websocket*, if given."""
     async for event in stream(
-        prompt,
-        project_path,
-        model,
-        intent=intent,
-        history=history,
-        gateway=gateway,
-        effort=effort,
+        prompt, project_path, model, intent=intent, history=history, gateway=gateway
     ):
         if websocket is not None:
             try:

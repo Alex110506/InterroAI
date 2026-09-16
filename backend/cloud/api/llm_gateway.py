@@ -53,7 +53,6 @@ ALLOWED_PARAMETERS = frozenset(
         "temperature",
         "top_p",
         "response_format",
-        "reasoning_effort",
         "max_completion_tokens",
         "stop",
         "seed",

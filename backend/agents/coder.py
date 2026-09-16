@@ -225,7 +225,6 @@ class CoderAgent:
         history: list[dict] | None = None,
         gateway: ModelGateway | None = None,
         index: SemanticIndex | None = None,
-        effort: str | None = None,
     ) -> None:
         self._intent = intent
         # Prior turns of this conversation, spliced in ahead of the current
@@ -234,15 +233,13 @@ class CoderAgent:
         self._path = Path(project_path).resolve()
         self._api_model = _MODEL_MAP.get(model, model)   # display ID → real API ID
         self._is_reasoning = self._api_model in _REASONING_MODELS
-        # Only reasoning models take an effort; sending one to the others is a 400.
-        self._effort = effort if self._is_reasoning else None
         # Where model calls and semantic searches go. The agent neither knows
         # nor cares whether that is OpenAI and a local index, or the cloud.
         self._gateway = gateway or providers.model_gateway()
         self._index = index or providers.semantic_index()
         self._modified: set[str] = set()   # absolute paths of files written/patched
-        logger.info("CoderAgent init: requested=%r  api_model=%r  reasoning=%s  effort=%s",
-                    model, self._api_model, self._is_reasoning, self._effort)
+        logger.info("CoderAgent init: requested=%r  api_model=%r  reasoning=%s",
+                    model, self._api_model, self._is_reasoning)
 
     # ── Public entry point ─────────────────────────────────────────────────
 
@@ -309,12 +306,11 @@ class CoderAgent:
 
     def _build_create_kwargs(self, messages: list[dict], temperature: float = 0.2, **extra) -> dict:
         kwargs: dict = {"model": self._api_model, "messages": messages, **extra}
-        # Chat completions refuses `reasoning_effort` together with function
-        # tools ("use /v1/responses, or set reasoning_effort to 'none'"). So the
-        # effort a display ID asks for reaches the planning call, which is where
-        # the thinking happens, and the tool rounds go without it.
-        if self._effort and not kwargs.get("tools"):
-            kwargs["reasoning_effort"] = self._effort
+        # `reasoning_effort` is deliberately never sent. Chat completions refuses
+        # it alongside function tools for these models ("use /v1/responses, or
+        # set reasoning_effort to 'none'"), and this agent's middle phase is
+        # nothing but function tools. Asking a model to think harder is therefore
+        # a move to the Responses API, not a parameter that can be added here.
         if not self._is_reasoning:
             kwargs["temperature"] = temperature
         return kwargs

@@ -134,7 +134,10 @@ async def test_only_the_agents_models_are_available(api):
     assert (await _today_totals(api)).requests == 0, "a refused request costs no allowance"
 
 
-@pytest.mark.parametrize("parameter", [{"n": 5}, {"store": True}, {"stream_options": {}}])
+@pytest.mark.parametrize(
+    "parameter",
+    [{"n": 5}, {"store": True}, {"stream_options": {}}, {"reasoning_effort": "high"}],
+)
 def test_parameters_outside_the_list_are_refused(api, parameter):
     response = _post(api, **parameter)
 

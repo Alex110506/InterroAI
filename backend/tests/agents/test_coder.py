@@ -53,33 +53,15 @@ def test_every_display_id_maps_to_an_api_id():
     assert _MODEL_MAP and all(isinstance(api, str) and api for api in _MODEL_MAP.values())
 
 
-def test_the_chosen_effort_is_sent_to_the_planning_call(tmp_path):
-    """Effort is chosen per request now, not baked into the model id."""
-    agent = CoderAgent(str(tmp_path), "gpt-5.6-sol", effort="xhigh")
-    assert agent._build_create_kwargs([])["reasoning_effort"] == "xhigh"
-
-
-def test_no_effort_is_sent_alongside_function_tools(tmp_path):
+@pytest.mark.parametrize("extra", [{}, {"tools": [{"t": 1}], "tool_choice": "auto"}])
+def test_reasoning_effort_is_never_sent(tmp_path, extra):
     """
-    OpenAI's chat completions refuses the pair outright: "Function tools with
-    reasoning_effort are not supported ... use /v1/responses". The tool rounds
-    therefore go without it, and the planning call keeps it.
+    Chat completions refuses it alongside function tools for this family ("use
+    /v1/responses, or set reasoning_effort to 'none'"), and the agent's middle
+    phase is function tools throughout — so the parameter is not sent at all,
+    on any call. Asking a model to think harder means the Responses API.
     """
-    agent = CoderAgent(str(tmp_path), "gpt-5.6-sol", effort="high")
-
-    kwargs = agent._build_create_kwargs([], tools=[{"t": 1}], tool_choice="auto")
-
-    assert "reasoning_effort" not in kwargs
-
-
-def test_no_effort_reaches_a_model_that_cannot_take_one(tmp_path):
-    """Sending `reasoning_effort` to a non-reasoning model is a 400, asked for or not."""
-    kwargs = CoderAgent(str(tmp_path), "gpt-4o-mini", effort="high")._build_create_kwargs([])
-    assert "reasoning_effort" not in kwargs
-
-
-def test_no_effort_is_sent_when_none_was_chosen(tmp_path):
-    kwargs = CoderAgent(str(tmp_path), "gpt-5.6-sol")._build_create_kwargs([])
+    kwargs = CoderAgent(str(tmp_path), "gpt-5.6-sol")._build_create_kwargs([], **extra)
     assert "reasoning_effort" not in kwargs
 
 

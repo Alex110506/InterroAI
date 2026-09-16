@@ -32,16 +32,10 @@ def captured_supervisor(monkeypatch):
     calls: list[dict] = []
 
     async def fake_stream(
-        prompt, project_path, model, intent="implement", history=None, gateway=None, effort=None
+        prompt, project_path, model, intent="implement", history=None, gateway=None
     ):
         calls.append(
-            {
-                "prompt": prompt,
-                "project_path": project_path,
-                "model": model,
-                "intent": intent,
-                "effort": effort,
-            }
+            {"prompt": prompt, "project_path": project_path, "model": model, "intent": intent}
         )
         yield {"type": "done", "summary": "stubbed"}
 

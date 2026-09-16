@@ -91,18 +91,18 @@ async def test_project_context_is_included_in_the_prompt():
     assert "main" in system
 
 
-async def test_classification_sends_no_temperature_and_asks_for_little_effort():
+async def test_classification_sends_neither_temperature_nor_effort():
     """
-    Every model the app offers reasons, and a reasoning model rejects
-    `temperature` outright. Routing stays cheap through `reasoning_effort`, and
-    on a model of its own so the picker's default never changes its cost.
+    Every model the app offers reasons, so `temperature` is refused outright,
+    and `reasoning_effort` cannot be used anywhere while the coder's tool rounds
+    go through chat completions. Determinism comes from the prompt and JSON mode.
     """
     gateway = _intent_gateway(json.dumps({"action": "answer"}))
     await session.classify_intent("x", {}, gateway=gateway)
 
     assert "temperature" not in gateway.requests[0]
+    assert "reasoning_effort" not in gateway.requests[0]
     assert gateway.requests[0]["model"] == session._INTENT_MODEL
-    assert gateway.requests[0]["reasoning_effort"] == session._INTENT_EFFORT
 
 
 async def test_classification_uses_the_fast_timeout():
@@ -136,19 +136,9 @@ def test_the_default_model_is_offered_by_the_picker():
     assert session._DEFAULT_MODEL in session.AVAILABLE_MODELS
 
 
-def test_the_offered_efforts_are_openais_own_values():
-    """They are passed straight through as `reasoning_effort`, not translated."""
-    assert session.AVAILABLE_EFFORTS == ("low", "medium", "high", "xhigh", "max")
-
-
-def test_the_default_effort_is_one_of_the_offered_ones():
-    assert session._DEFAULT_EFFORT in session.AVAILABLE_EFFORTS
-
-
 def test_the_classifier_runs_on_an_offered_model():
     """Routing must not name a model the gateway's allowlist would refuse."""
     assert session._INTENT_MODEL in session.AVAILABLE_MODELS
-    assert session._INTENT_EFFORT in session.AVAILABLE_EFFORTS
 
 
 # ── Session routing ──────────────────────────────────────────────────────────
@@ -160,7 +150,7 @@ def captured_agent(monkeypatch):
     calls: list[dict] = []
 
     async def fake_stream(
-        prompt, project_path, model, intent="implement", history=None, gateway=None, effort=None
+        prompt, project_path, model, intent="implement", history=None, gateway=None
     ):
         calls.append(
             {
@@ -170,7 +160,6 @@ def captured_agent(monkeypatch):
                 "intent": intent,
                 "history": list(history or []),
                 "gateway": gateway,
-                "effort": effort,
             }
         )
         yield {"type": "done", "summary": "stubbed"}
@@ -212,36 +201,6 @@ async def test_omitting_the_model_uses_the_default(monkeypatch, captured_agent):
     chat = ChatSession("/tmp/p", {})
     await _drain(chat.start("rename X"))
     assert captured_agent[0]["model"] == session._DEFAULT_MODEL
-
-
-async def test_an_unknown_effort_is_rejected_before_any_api_call():
-    gateway = FakeGateway()
-    chat = ChatSession("/tmp/p", {}, model="gpt-5.6-sol", gateway=gateway, effort="ludicrous")
-    events = await _drain(chat.start("hi"))
-
-    assert events[0]["type"] == "error"
-    assert "Unknown effort" in events[0]["message"]
-    assert gateway.requests == [], "the effort must be checked before the provider is touched"
-
-
-async def test_a_rejected_effort_leaves_the_session_usable():
-    chat = ChatSession("/tmp/p", {}, effort="bogus", gateway=FakeGateway())
-    await _drain(chat.start("hi"))
-    assert chat.finished is False
-
-
-async def test_the_chosen_effort_reaches_the_agent(monkeypatch, captured_agent):
-    _fix_intent(monkeypatch, "implement")
-    chat = ChatSession("/tmp/p", {}, model="gpt-5.6-sol", effort="max")
-    await _drain(chat.start("rename X"))
-    assert captured_agent[0]["effort"] == "max"
-
-
-async def test_omitting_the_effort_uses_the_default(monkeypatch, captured_agent):
-    _fix_intent(monkeypatch, "implement")
-    chat = ChatSession("/tmp/p", {})
-    await _drain(chat.start("rename X"))
-    assert captured_agent[0]["effort"] == session._DEFAULT_EFFORT
 
 
 async def test_an_answer_goes_straight_to_the_qa_agent(monkeypatch, captured_agent):

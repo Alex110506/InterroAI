@@ -9,9 +9,6 @@ socket.
 
 Client frames:
   {"type": "start",       "project_path", "project_index", "message", "model",
-                          "effort",        — how hard the model should think,
-                                             one of `session.AVAILABLE_EFFORTS`;
-                                             omitted, the session's default.
                           "history"}       — prior turns, oldest first, in
                                              OpenAI message shape. Optional;
                                              the server stores no transcript,
@@ -53,7 +50,6 @@ async def chat_ws(websocket: WebSocket) -> None:
                 project_index=payload.get("project_index") or {},
                 model=payload.get("model"),
                 history=payload.get("history"),
-                effort=payload.get("effort"),
             )
 
             async for event in session.start(payload.get("message", "")):
