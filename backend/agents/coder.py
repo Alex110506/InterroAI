@@ -306,11 +306,15 @@ class CoderAgent:
 
     def _build_create_kwargs(self, messages: list[dict], temperature: float = 0.2, **extra) -> dict:
         kwargs: dict = {"model": self._api_model, "messages": messages, **extra}
-        # `reasoning_effort` is deliberately never sent. Chat completions refuses
-        # it alongside function tools for these models ("use /v1/responses, or
-        # set reasoning_effort to 'none'"), and this agent's middle phase is
-        # nothing but function tools. Asking a model to think harder is therefore
-        # a move to the Responses API, not a parameter that can be added here.
+        # These models reason by default, and chat completions refuses function
+        # tools together with reasoning — so a tools request must switch it off
+        # explicitly. Omitting the parameter is NOT the same as "none": the 400
+        # that cost an afternoon ("Function tools with reasoning_effort are not
+        # supported ... use /v1/responses or set reasoning_effort to 'none'")
+        # arrived on a body that never carried the key at all. Tools-free calls —
+        # the plan, and the classifier — keep the model's own default reasoning.
+        if self._is_reasoning and kwargs.get("tools"):
+            kwargs["reasoning_effort"] = "none"
         if not self._is_reasoning:
             kwargs["temperature"] = temperature
         return kwargs

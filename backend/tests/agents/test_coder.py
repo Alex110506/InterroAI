@@ -53,15 +53,32 @@ def test_every_display_id_maps_to_an_api_id():
     assert _MODEL_MAP and all(isinstance(api, str) and api for api in _MODEL_MAP.values())
 
 
-@pytest.mark.parametrize("extra", [{}, {"tools": [{"t": 1}], "tool_choice": "auto"}])
-def test_reasoning_effort_is_never_sent(tmp_path, extra):
+def test_a_tools_request_switches_reasoning_off(tmp_path):
     """
-    Chat completions refuses it alongside function tools for this family ("use
-    /v1/responses, or set reasoning_effort to 'none'"), and the agent's middle
-    phase is function tools throughout — so the parameter is not sent at all,
-    on any call. Asking a model to think harder means the Responses API.
+    These models reason by default and chat completions refuses tools alongside
+    reasoning, so a tools request has to say "none" out loud. Omitting the
+    parameter is not the same thing — that was the 400: a body carrying no
+    `reasoning_effort` at all, rejected for having one.
     """
-    kwargs = CoderAgent(str(tmp_path), "gpt-5.6-sol")._build_create_kwargs([], **extra)
+    agent = CoderAgent(str(tmp_path), "gpt-5.6-sol")
+
+    kwargs = agent._build_create_kwargs([], tools=[{"t": 1}], tool_choice="auto")
+
+    assert kwargs["reasoning_effort"] == "none"
+
+
+def test_a_tools_free_call_keeps_the_models_own_reasoning(tmp_path):
+    """The plan and the classifier send no tools, so reasoning is left alone."""
+    kwargs = CoderAgent(str(tmp_path), "gpt-5.6-sol")._build_create_kwargs([])
+    assert "reasoning_effort" not in kwargs
+
+
+def test_reasoning_is_not_switched_off_for_a_model_that_never_reasons(tmp_path):
+    """An ordinary model does not accept `reasoning_effort` at all, "none" included."""
+    agent = CoderAgent(str(tmp_path), "gpt-4o-mini")
+
+    kwargs = agent._build_create_kwargs([], tools=[{"t": 1}], tool_choice="auto")
+
     assert "reasoning_effort" not in kwargs
 
 

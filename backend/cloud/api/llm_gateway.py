@@ -53,6 +53,9 @@ ALLOWED_PARAMETERS = frozenset(
         "temperature",
         "top_p",
         "response_format",
+        # The runtime sends "none" on every tools request: these models reason by
+        # default and chat completions refuses tools alongside reasoning.
+        "reasoning_effort",
         "max_completion_tokens",
         "stop",
         "seed",

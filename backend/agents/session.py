@@ -61,12 +61,9 @@ AVAILABLE_MODELS: tuple[str, ...] = (
 )
 
 #: What the intent classifier runs on — a model of its own, so changing the
-#: picker's default never changes the cost of routing.
-#:
-#: There is deliberately no effort setting anywhere in the app: chat completions
-#: refuses `reasoning_effort` alongside function tools for this family, and the
-#: coder's middle phase is entirely function tools. Offering the choice would
-#: mean moving to the Responses API.
+#: picker's default never changes the cost of routing. It sends no tools, so it
+#: keeps the model's default reasoning; `coder._build_create_kwargs` explains
+#: why the tool rounds have to switch reasoning off instead.
 _INTENT_MODEL = "gpt-5.6-luna"
 
 _INTENT_SYSTEM = """\
@@ -169,9 +166,9 @@ async def classify_intent(
     context = f"PROJECT STRUCTURE:\n{tree_str or '(empty)'}\n\nGIT CONTEXT:\n{git_str}"
 
     gateway = gateway or providers.model_gateway()
-    # Neither `temperature` nor `reasoning_effort`: every model the app offers
-    # reasons, so temperature is refused outright, and effort cannot be used
-    # anywhere while the coder's tool rounds go through chat completions.
+    # No `temperature`: every model the app offers reasons, and a reasoning model
+    # refuses it outright. No `reasoning_effort` either — this call sends no
+    # tools, so the model's default reasoning is allowed, and welcome, here.
     # Determinism comes from the prompt and JSON mode.
     response = await gateway.chat(
         timeout=FAST_TIMEOUT,
