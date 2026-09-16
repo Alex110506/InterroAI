@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
 
-MODEL = "gpt-5.4-mini"
+MODEL = "gpt-5.6-sol"
 
 
 def _usage(prompt: int, completion: int) -> dict:

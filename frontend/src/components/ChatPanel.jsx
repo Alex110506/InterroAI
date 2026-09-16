@@ -159,22 +159,33 @@ function ThinkingBubble() {
 }
 
 const MODELS = [
-  { id: 'gpt-5.5-high-effort', label: 'GPT-5.5 High Effort' },
-  { id: 'gpt-5.5-low-effort',  label: 'GPT-5.5 Low Effort' },
-  { id: 'gpt-5.4-high-effort', label: 'GPT-5.4 High Effort' },
-  { id: 'gpt-5.4-low-effort',  label: 'GPT-5.4 Low Effort' },
-  { id: 'gpt-5.4-mini',        label: 'GPT-5.4 Mini' },
+  { id: 'gpt-5.6-sol',   label: 'GPT-5.6 Sol' },
+  { id: 'gpt-5.6-terra', label: 'GPT-5.6 Terra' },
+  { id: 'gpt-5.6-luna',  label: 'GPT-5.6 Luna' },
 ]
 
-// The model the picker starts on. Must be one of MODELS above — the backend
-// rejects any ID it doesn't recognise.
-const DEFAULT_MODEL = 'gpt-5.4-high-effort'
+// How hard the model thinks, chosen separately from which model runs. These are
+// OpenAI's own `reasoning_effort` values; the backend rejects anything else.
+const EFFORTS = [
+  { id: 'low',    label: 'Low' },
+  { id: 'medium', label: 'Medium' },
+  { id: 'high',   label: 'High' },
+  { id: 'xhigh',  label: 'Extra High' },
+  { id: 'max',    label: 'Max' },
+]
+
+// What the pickers start on. Both must be ids the backend knows — it rejects
+// anything it can't resolve rather than quietly substituting.
+const DEFAULT_MODEL = 'gpt-5.6-sol'
+const DEFAULT_EFFORT = 'medium'
 
 /* ─── Main ChatPanel ─────────────────────────────────────────────────── */
 export default function ChatPanel({ activeId, projects, thoughtOpen, onToggleThought, onThoughtEvent, clearThought, onAuthLost }) {
   const [input, setInput] = useState('')
   const [selectedModel, setSelectedModel] = useState(DEFAULT_MODEL)
   const [showModelDropdown, setShowModelDropdown] = useState(false)
+  const [selectedEffort, setSelectedEffort] = useState(DEFAULT_EFFORT)
+  const [showEffortDropdown, setShowEffortDropdown] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [, forceUpdate] = useState(0)
   const textareaRef = useRef(null)
@@ -294,6 +305,7 @@ export default function ChatPanel({ activeId, projects, thoughtOpen, onToggleTho
         project_index: project.index ?? {},
         message: text,
         model: selectedModel,
+        effort: selectedEffort,
         history,
       }))
     }
@@ -326,6 +338,21 @@ export default function ChatPanel({ activeId, projects, thoughtOpen, onToggleTho
     `Ask about ${project.folderName}…`
 
   const currentModelLabel = MODELS.find(m => m.id === selectedModel)?.label ?? selectedModel
+  const currentEffortLabel = EFFORTS.find(e => e.id === selectedEffort)?.label ?? selectedEffort
+
+  // Both pickers share one look, and opening either closes the other.
+  const dropdownStyle = {
+    position: 'absolute', bottom: '100%', left: 0,
+    backgroundColor: 'var(--bg)', border: '1px solid var(--border)',
+    borderRadius: '6px', padding: '4px', zIndex: 10, marginBottom: '4px',
+    width: 'max-content', display: 'flex', flexDirection: 'column', gap: '2px',
+    boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
+  }
+  const optionStyle = (selected) => ({
+    background: selected ? 'var(--bg-2)' : 'transparent',
+    border: 'none', color: 'var(--text-1)', padding: '6px 12px',
+    textAlign: 'left', borderRadius: '4px', cursor: 'pointer', fontSize: '13px',
+  })
 
   /* ── No project selected ── */
   if (!project) {
@@ -356,6 +383,11 @@ export default function ChatPanel({ activeId, projects, thoughtOpen, onToggleTho
                 <div style={{position: 'relative'}}>
                   <button className={s.modelBtn} disabled>
                     <span>{currentModelLabel}</span><ChevronDown size={12} strokeWidth={2} />
+                  </button>
+                </div>
+                <div style={{position: 'relative'}}>
+                  <button className={s.modelBtn} disabled>
+                    <span>{currentEffortLabel}</span><ChevronDown size={12} strokeWidth={2} />
                   </button>
                 </div>
               </div>
@@ -440,34 +472,48 @@ export default function ChatPanel({ activeId, projects, thoughtOpen, onToggleTho
                 <Plus size={16} strokeWidth={2} />
               </button>
               <div style={{position: 'relative'}}>
-                <button 
-                  className={s.modelBtn} 
+                <button
+                  className={s.modelBtn}
                   disabled={isLoading}
-                  onClick={() => setShowModelDropdown(!showModelDropdown)}
+                  onClick={() => { setShowModelDropdown(!showModelDropdown); setShowEffortDropdown(false); }}
+                  title="Which model runs the task"
                 >
                   <span>{currentModelLabel}</span>
                   <ChevronDown size={12} strokeWidth={2} />
                 </button>
                 {showModelDropdown && (
-                  <div className={s.modelDropdown} style={{
-                    position: 'absolute', bottom: '100%', left: 0, 
-                    backgroundColor: 'var(--bg)', border: '1px solid var(--border)',
-                    borderRadius: '6px', padding: '4px', zIndex: 10, marginBottom: '4px',
-                    width: 'max-content', display: 'flex', flexDirection: 'column', gap: '2px',
-                    boxShadow: '0 4px 12px rgba(0,0,0,0.1)'
-                  }}>
+                  <div className={s.modelDropdown} style={dropdownStyle}>
                     {MODELS.map(m => (
-                      <button 
+                      <button
                         key={m.id}
                         onClick={() => { setSelectedModel(m.id); setShowModelDropdown(false); }}
-                        style={{
-                          background: selectedModel === m.id ? 'var(--bg-2)' : 'transparent',
-                          border: 'none', color: 'var(--text-1)', padding: '6px 12px',
-                          textAlign: 'left', borderRadius: '4px', cursor: 'pointer',
-                          fontSize: '13px'
-                        }}
+                        style={optionStyle(selectedModel === m.id)}
                       >
                         {m.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div style={{position: 'relative'}}>
+                <button
+                  className={s.modelBtn}
+                  disabled={isLoading}
+                  onClick={() => { setShowEffortDropdown(!showEffortDropdown); setShowModelDropdown(false); }}
+                  title="How hard the model should think"
+                >
+                  <span>{currentEffortLabel}</span>
+                  <ChevronDown size={12} strokeWidth={2} />
+                </button>
+                {showEffortDropdown && (
+                  <div className={s.modelDropdown} style={dropdownStyle}>
+                    {EFFORTS.map(e => (
+                      <button
+                        key={e.id}
+                        onClick={() => { setSelectedEffort(e.id); setShowEffortDropdown(false); }}
+                        style={optionStyle(selectedEffort === e.id)}
+                      >
+                        {e.label}
                       </button>
                     ))}
                   </div>

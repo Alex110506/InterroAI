@@ -52,7 +52,7 @@ class Limits:
     sse_heartbeat_seconds: float = 15.0
     quota: Quota = Quota(requests=500, tokens=200_000)
     rates: RateLimits = RateLimits()
-    chat_models: frozenset[str] = frozenset({"gpt-5.4-mini", "gpt-5.4", "gpt-5.5"})
+    chat_models: frozenset[str] = frozenset({"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"})
 
 
 @dataclass

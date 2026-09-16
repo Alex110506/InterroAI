@@ -21,7 +21,6 @@ import json
 import logging
 import re
 from pathlib import Path
-from typing import NamedTuple
 
 from contracts.indexing import SearchHit, SearchRequest
 from core import providers
@@ -44,28 +43,29 @@ logger = logging.getLogger(__name__)
 _MAX_TOOL_ROUNDS = 20
 _MAX_CORRECTIONS = 3
 
-class _Model(NamedTuple):
-    """What a display ID resolves to: the real model, and how hard it should think."""
-
-    api_id: str
-    #: OpenAI's `reasoning_effort`. None for models that have no such setting.
-    #: It is the entire difference between a model's two display IDs — without
-    #: it, "low effort" and "high effort" are the very same request.
-    effort: str | None = None
-
-
-# Map display-facing model IDs to real OpenAI API model IDs and reasoning effort
-_MODEL_MAP: dict[str, _Model] = {
-    "gpt-5.4-mini":        _Model("gpt-5.4-mini"),
-    "gpt-5.4-low-effort":  _Model("gpt-5.4", "low"),
-    "gpt-5.4-high-effort": _Model("gpt-5.4", "high"),
-    "gpt-5.5-low-effort":  _Model("gpt-5.5", "low"),
-    "gpt-5.5-high-effort": _Model("gpt-5.5", "high"),
+# Map display-facing model IDs to real OpenAI API model IDs. They are identical
+# for the GPT-5.6 family; the indirection stays because it is also what decides
+# whether a caller's choice is valid (`agents/session.py`) and where an alias
+# for a renamed model would go. Effort is chosen separately, per request.
+_MODEL_MAP: dict[str, str] = {
+    "gpt-5.6-sol":   "gpt-5.6-sol",
+    "gpt-5.6-terra": "gpt-5.6-terra",
+    "gpt-5.6-luna":  "gpt-5.6-luna",
 }
 
-# Reasoning models require temperature to be omitted
-# gpt-5.4 and gpt-5.5 are high-reasoning models — omit temperature to avoid API errors
-_REASONING_MODELS = {"gpt-5.5", "gpt-5.4", "o1", "o1-mini", "o1-preview", "o3", "o3-mini", "o4-mini"}  # noqa: E501
+# Reasoning models reject `temperature` and take `reasoning_effort` instead.
+# Every GPT-5.6 model reasons; the o-series stays listed because a raw OpenAI
+# id passes through `_MODEL_MAP` unchanged and must still be handled correctly.
+_REASONING_MODELS = {
+    "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
+    "o1", "o1-mini", "o1-preview", "o3", "o3-mini", "o4-mini",
+}
+
+# Models whose streaming is unreliable, so their plan is fetched in one call.
+# Only the o1 family. This used to be gated on "is it a reasoning model", which
+# was the same set in practice — but now every model the app offers reasons, and
+# that would silence the streamed plan the right-hand panel exists to show.
+_NO_STREAM_MODELS = {"o1", "o1-mini", "o1-preview"}
 
 # ── Tool schemas ──────────────────────────────────────────────────────────────
 
@@ -225,17 +225,17 @@ class CoderAgent:
         history: list[dict] | None = None,
         gateway: ModelGateway | None = None,
         index: SemanticIndex | None = None,
+        effort: str | None = None,
     ) -> None:
         self._intent = intent
         # Prior turns of this conversation, spliced in ahead of the current
         # request so a follow-up ("now the other one") has a referent.
         self._history: list[dict] = list(history or [])
         self._path = Path(project_path).resolve()
-        resolved = _MODEL_MAP.get(model) or _Model(model)   # display ID → real API ID
-        self._api_model = resolved.api_id
+        self._api_model = _MODEL_MAP.get(model, model)   # display ID → real API ID
         self._is_reasoning = self._api_model in _REASONING_MODELS
         # Only reasoning models take an effort; sending one to the others is a 400.
-        self._effort = resolved.effort if self._is_reasoning else None
+        self._effort = effort if self._is_reasoning else None
         # Where model calls and semantic searches go. The agent neither knows
         # nor cares whether that is OpenAI and a local index, or the cloud.
         self._gateway = gateway or providers.model_gateway()
@@ -326,8 +326,8 @@ class CoderAgent:
             {"role": "user", "content": f"{knowledge_tree}\n\nTASK:\n{prompt}"},
         ]
 
-        if self._is_reasoning:
-            # o1-family doesn't stream reliably — single-shot call
+        if self._api_model in _NO_STREAM_MODELS:
+            # Streaming is unreliable here, so take the whole plan in one call.
             response = await self._gateway.chat(
                 timeout=LONG_TIMEOUT,
                 **self._build_create_kwargs(messages=messages, temperature=0.2),

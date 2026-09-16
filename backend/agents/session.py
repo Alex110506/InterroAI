@@ -4,7 +4,7 @@ Chat session — the agent pipeline, independent of any transport.
 One user message flows through two steps:
 
   Step 1 — Intent classification (2-way):
-    gpt-5.4-mini classifies the user's request as one of:
+    A fast model classifies the user's request as one of:
       • "answer"    — general question; reply directly with Markdown
       • "implement" — implementation task; go straight to the coder
 
@@ -48,19 +48,32 @@ logger = logging.getLogger(__name__)
 # Used when the caller omits a model entirely. Any value that *is* supplied
 # must be a known display ID — we reject unknown ones rather than silently
 # substituting a different (possibly pricier) model.
-_DEFAULT_MODEL = "gpt-5.4-high-effort"
+_DEFAULT_MODEL = "gpt-5.6-sol"
 
 #: Display IDs a caller may choose from, best-first. `test_session.py` holds
 #: this equal to the coder's model map, so validation cannot drift from what the
 #: coder resolves. (The Electron picker keeps its own copy, `MODELS` in
 #: `frontend/src/components/ChatPanel.jsx`, which nothing checks.)
 AVAILABLE_MODELS: tuple[str, ...] = (
-    "gpt-5.5-high-effort",
-    "gpt-5.5-low-effort",
-    "gpt-5.4-high-effort",
-    "gpt-5.4-low-effort",
-    "gpt-5.4-mini",
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
 )
+
+#: How hard the model should think, chosen per request and independent of the
+#: model. Passed straight through as OpenAI's `reasoning_effort`, so these are
+#: its values, not names of our own.
+AVAILABLE_EFFORTS: tuple[str, ...] = ("low", "medium", "high", "xhigh", "max")
+
+#: Used when the caller names no effort. OpenAI's own default, and the one that
+#: does not quietly make every request expensive.
+_DEFAULT_EFFORT = "medium"
+
+#: What the intent classifier runs on. Routing is a small prompt that must feel
+#: instant, so it takes the least effort the family offers — and a model of its
+#: own, so changing the picker's default never changes the cost of routing.
+_INTENT_MODEL = "gpt-5.6-luna"
+_INTENT_EFFORT = "low"
 
 _INTENT_SYSTEM = """\
 You are a routing agent for an AI coding assistant. Classify the user's request into exactly one of two actions:
@@ -114,6 +127,18 @@ def unknown_model_message(model: str) -> str:
     )
 
 
+def is_known_effort(effort: str) -> bool:
+    """True when *effort* is one of the values OpenAI accepts."""
+    return effort in AVAILABLE_EFFORTS
+
+
+def unknown_effort_message(effort: str) -> str:
+    return (
+        f"Unknown effort {effort!r}. "
+        f"Expected one of: {', '.join(AVAILABLE_EFFORTS)}."
+    )
+
+
 def _fmt_tree(node: dict, depth: int = 0, max_depth: int = 4) -> str:
     if depth > max_depth or not node:
         return ""
@@ -161,16 +186,19 @@ async def classify_intent(
     context = f"PROJECT STRUCTURE:\n{tree_str or '(empty)'}\n\nGIT CONTEXT:\n{git_str}"
 
     gateway = gateway or providers.model_gateway()
+    # No `temperature`: every model the app offers is a reasoning model, and
+    # they refuse it outright. Determinism comes from the prompt and JSON mode
+    # instead, and `reasoning_effort` keeps routing cheap.
     response = await gateway.chat(
         timeout=FAST_TIMEOUT,
-        model="gpt-5.4-mini",
+        model=_INTENT_MODEL,
         messages=[
             {"role": "system", "content": f"{_INTENT_SYSTEM}\n\n{context}"},
             *trim_history(history),
             {"role": "user", "content": user_message},
         ],
         response_format={"type": "json_object"},
-        temperature=0.0,
+        reasoning_effort=_INTENT_EFFORT,
     )
 
     raw = response.choices[0].message.content
@@ -204,8 +232,8 @@ class ChatSession:
 
     `finished` is True once the work is done and the session should be thrown
     away. It stays False only when `start()` rejected the request outright
-    (an unknown model) — the caller can pick a valid one and try again on the
-    same session.
+    (an unknown model or effort) — the caller can pick a valid one and try
+    again on the same session.
     """
 
     def __init__(
@@ -215,10 +243,13 @@ class ChatSession:
         model: str | None = None,
         history: list[dict] | None = None,
         gateway: ModelGateway | None = None,
+        effort: str | None = None,
     ) -> None:
         self.project_path = project_path
         self.project_index = project_index or {}
         self.model = model or _DEFAULT_MODEL
+        #: Chosen per request, independently of the model.
+        self.effort = effort or _DEFAULT_EFFORT
         self.history = trim_history(history)
         self.gateway = gateway or providers.model_gateway()
         self.finished = False
@@ -232,8 +263,11 @@ class ChatSession:
             # carry on with the same session rather than starting over.
             yield {"type": "error", "message": unknown_model_message(self.model)}
             return
+        if not is_known_effort(self.effort):
+            yield {"type": "error", "message": unknown_effort_message(self.effort)}
+            return
 
-        logger.info("User selected model: %s", self.model)
+        logger.info("User selected model: %s (effort: %s)", self.model, self.effort)
 
         async for event in self._guard(self._route(user_message)):
             yield event
@@ -264,6 +298,7 @@ class ChatSession:
             intent=intent,
             history=self.history,
             gateway=self.gateway,
+            effort=self.effort,
         ):
             yield event
         self.finished = True

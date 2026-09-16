@@ -96,7 +96,7 @@ class ApiSettings(WorkerSettings):
     daily_request_quota: int = 500
 
     #: Comma-separated OpenAI model ids `/llm/chat` accepts: the ones the agents use.
-    chat_models: str = "gpt-5.4-mini,gpt-5.4,gpt-5.5"
+    chat_models: str = "gpt-5.6-sol,gpt-5.6-terra,gpt-5.6-luna"
     #: How long an upload URL stays usable.
     upload_url_ttl_seconds: int = 15 * 60
     #: Idle time after which a job's event stream sends a keep-alive comment.
