@@ -309,7 +309,11 @@ class CoderAgent:
 
     def _build_create_kwargs(self, messages: list[dict], temperature: float = 0.2, **extra) -> dict:
         kwargs: dict = {"model": self._api_model, "messages": messages, **extra}
-        if self._effort:
+        # Chat completions refuses `reasoning_effort` together with function
+        # tools ("use /v1/responses, or set reasoning_effort to 'none'"). So the
+        # effort a display ID asks for reaches the planning call, which is where
+        # the thinking happens, and the tool rounds go without it.
+        if self._effort and not kwargs.get("tools"):
             kwargs["reasoning_effort"] = self._effort
         if not self._is_reasoning:
             kwargs["temperature"] = temperature

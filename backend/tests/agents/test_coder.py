@@ -61,10 +61,23 @@ def test_a_models_two_display_ids_differ_only_in_effort():
     assert (low.effort, high.effort) == ("low", "high")
 
 
-def test_the_chosen_effort_is_sent(tmp_path):
+def test_the_chosen_effort_is_sent_to_the_planning_call(tmp_path):
     assert CoderAgent(str(tmp_path), "gpt-5.4-low-effort")._build_create_kwargs([])[
         "reasoning_effort"
     ] == "low"
+
+
+def test_no_effort_is_sent_alongside_function_tools(tmp_path):
+    """
+    OpenAI's chat completions refuses the pair outright: "Function tools with
+    reasoning_effort are not supported ... use /v1/responses". The tool rounds
+    therefore go without it, and the planning call keeps it.
+    """
+    agent = CoderAgent(str(tmp_path), "gpt-5.4-high-effort")
+
+    kwargs = agent._build_create_kwargs([], tools=[{"t": 1}], tool_choice="auto")
+
+    assert "reasoning_effort" not in kwargs
 
 
 def test_no_effort_is_sent_to_a_model_that_has_none(tmp_path):
