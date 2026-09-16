@@ -1,25 +1,27 @@
 """
 OpenAI text-embedding-3-small batch client (Section 3C of architecture spec).
 
-`embed_batches` is the form the indexer uses, and it is a generator for two
+`embed_batches` is a generator that yields each batch as it completes, for two
 reasons:
 
-  * **Partial progress survives a failure.** Its caller persists each batch as
-    it arrives, so a project that dies on batch 59 of 60 keeps the 58 batches
-    already paid for. The previous version accumulated every vector in memory
-    and stored them in one call at the very end, which meant any late failure
-    threw away the whole run's API spend.
+  * **Paid-for work survives a failure.** Given an `EmbeddingCache`, every batch
+    is written to the cache the moment it lands, so a job that dies on batch 59
+    of 60 re-embeds none of the first 58 when it runs again. (Without a cache —
+    the local build with no Redis running — a failed job pays again.) The index
+    itself is written once, atomically, after the last batch: see
+    `core/index/indexer.py`.
   * **Progress needs no callback.** The caller is itself a generator; when this
-    one yields, progress can simply be re-yielded. An earlier version bridged a
-    progress callback to a generator with an `asyncio.Queue`, which is now
-    unnecessary.
+    one yields, progress can simply be re-yielded.
 
 One bad chunk does not sink the run. A batch that fails with an *item* error
-(see `core.models.llm.ITEM_ERRORS` — a chunk over the token limit, say) is bisected to
-find the offending items, which are reported as failures and skipped while the
-rest of the batch is kept. Anything else — the provider being down, a bad key —
-is environmental and propagates, because skipping items one at a time through a
-real outage would quietly produce an empty index.
+(see `core.models.llm.ITEM_ERRORS` — a chunk over the token limit, say) is
+bisected to find the offending items, which are reported as failures and
+skipped while the rest of the batch is kept. Anything else — the provider being
+down, a bad key — is environmental and propagates, because skipping items one at
+a time through a real outage would quietly produce an empty index.
+
+The cache is an accelerator in every build: one that fails to answer or to
+store is logged and treated as a miss, never allowed to fail the embedding.
 """
 from __future__ import annotations
 
@@ -27,7 +29,7 @@ import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 
-from core.local import cache
+from core.index.ports import EmbeddingCache, content_digest
 from core.models.llm import EMBED_TIMEOUT, ITEM_ERRORS, embed_batch, get_client
 
 logger = logging.getLogger(__name__)
@@ -39,7 +41,7 @@ _BATCH_SIZE = 100
 @dataclass(frozen=True)
 class EmbeddedBatch:
     """
-    One batch's worth of finished embeddings, ready to persist.
+    One batch's worth of finished embeddings.
 
     `indices` are positions in the list originally handed to `embed_batches`,
     and `vectors` is aligned with it. Positions that could not be embedded at
@@ -56,15 +58,17 @@ async def embed_batches(
     texts: list[str],
     *,
     model: str = _MODEL,
+    cache: EmbeddingCache | None = None,
 ) -> AsyncIterator[EmbeddedBatch]:
     """
     Embed *texts*, yielding each batch as it completes.
 
-    Cached vectors are served without touching the API — identical text always
-    has an identical embedding, so a moved or renamed file costs nothing.
+    Vectors already in *cache* are served without touching the API — identical
+    text always has an identical embedding, so a moved or renamed file costs
+    nothing — and every freshly embedded vector is written to it.
 
     Raises:
-        MissingAPIKeyError: no API key is stored in the keychain.
+        MissingAPIKeyError: no API key is configured.
         openai.APIError: the provider failed in a way that is not attributable
             to a single input (see the module docstring).
     """
@@ -76,40 +80,40 @@ async def embed_batches(
     for start in range(0, len(texts), _BATCH_SIZE):
         positions = list(range(start, min(start + _BATCH_SIZE, len(texts))))
 
-        # Identical text inside one batch shares a key, so group by key and
-        # embed each distinct text once.
-        by_key: dict[str, list[int]] = {}
+        # Identical text inside one batch shares a digest, so each distinct
+        # text is embedded once.
+        by_digest: dict[str, list[int]] = {}
         for position in positions:
-            by_key.setdefault(cache.vector_key(texts[position], model), []).append(position)
+            by_digest.setdefault(content_digest(texts[position]), []).append(position)
 
-        cached = await cache.get_vectors(list(by_key))
-        missing = [key for key in by_key if key not in cached]
+        cached = await _cache_get(cache, model, list(by_digest))
+        missing = [digest for digest in by_digest if digest not in cached]
 
         fresh: dict[str, list[float]] = {}
         failures: dict[int, BaseException] = {}
         if missing:
-            fresh, failed_keys = await _embed_keys(client, model, missing, texts, by_key)
-            await cache.set_vectors(fresh)
-            for key, exc in failed_keys.items():
-                for position in by_key[key]:
+            fresh, failed = await _embed_digests(client, model, missing, texts, by_digest)
+            await _cache_put(cache, model, fresh)
+            for digest, exc in failed.items():
+                for position in by_digest[digest]:
                     failures[position] = exc
 
         indices: list[int] = []
         vectors: list[list[float]] = []
         from_cache = 0
-        for key, key_positions in by_key.items():
-            vector = cached.get(key)
+        for digest, digest_positions in by_digest.items():
+            vector = cached.get(digest)
             if vector is None:
-                vector = fresh.get(key)
+                vector = fresh.get(digest)
             else:
-                from_cache += len(key_positions)
+                from_cache += len(digest_positions)
             if vector is None:
                 continue
-            for position in key_positions:
+            for position in digest_positions:
                 indices.append(position)
                 vectors.append(vector)
 
-        # Sorted so a consumer storing batch-by-batch sees a stable order.
+        # Sorted so a consumer sees a stable order.
         order = sorted(range(len(indices)), key=lambda i: indices[i])
         yield EmbeddedBatch(
             indices=[indices[i] for i in order],
@@ -119,16 +123,39 @@ async def embed_batches(
         )
 
 
-async def _embed_keys(
+async def _cache_get(
+    cache: EmbeddingCache | None, model: str, digests: list[str]
+) -> dict[str, list[float]]:
+    if cache is None or not digests:
+        return {}
+    try:
+        return await cache.get(model, digests)
+    except Exception:  # noqa: BLE001
+        logger.warning("The embedding cache could not be read; carrying on.", exc_info=True)
+        return {}
+
+
+async def _cache_put(
+    cache: EmbeddingCache | None, model: str, vectors: dict[str, list[float]]
+) -> None:
+    if cache is None or not vectors:
+        return
+    try:
+        await cache.put(model, vectors)
+    except Exception:  # noqa: BLE001
+        logger.warning("The embedding cache could not be written; carrying on.", exc_info=True)
+
+
+async def _embed_digests(
     client,
     model: str,
-    keys: list[str],
+    digests: list[str],
     texts: list[str],
-    by_key: dict[str, list[int]],
+    by_digest: dict[str, list[int]],
 ) -> tuple[dict[str, list[float]], dict[str, BaseException]]:
-    """Embed the text behind each of *keys*, isolating any item that fails."""
-    inputs = [texts[by_key[key][0]] for key in keys]
-    vectors, failed = await _embed_isolating(client, model, keys, inputs)
+    """Embed the text behind each of *digests*, isolating any item that fails."""
+    inputs = [texts[by_digest[digest][0]] for digest in digests]
+    vectors, failed = await _embed_isolating(client, model, digests, inputs)
     if failed:
         logger.warning(
             "%d chunk(s) could not be embedded and were skipped: %s",
@@ -173,7 +200,12 @@ async def _embed_isolating(
     return {**left_vectors, **right_vectors}, {**left_failed, **right_failed}
 
 
-async def embed_texts(texts: list[str], *, model: str = _MODEL) -> list[list[float]]:
+async def embed_texts(
+    texts: list[str],
+    *,
+    model: str = _MODEL,
+    cache: EmbeddingCache | None = None,
+) -> list[list[float]]:
     """
     Embed *texts* and return every vector, in order.
 
@@ -182,13 +214,13 @@ async def embed_texts(texts: list[str], *, model: str = _MODEL) -> list[list[flo
     leaving a hole in the returned list.
 
     Raises:
-        MissingAPIKeyError: no API key is stored in the keychain.
+        MissingAPIKeyError: no API key is configured.
         openai.APIError: the provider failed, or one of *texts* could not be
             embedded at all.
     """
     vectors: list[list[float] | None] = [None] * len(texts)
 
-    async for batch in embed_batches(texts, model=model):
+    async for batch in embed_batches(texts, model=model, cache=cache):
         if batch.failures:
             raise next(iter(batch.failures.values()))
         for position, vector in zip(batch.indices, batch.vectors, strict=True):

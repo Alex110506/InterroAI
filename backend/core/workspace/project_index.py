@@ -451,7 +451,10 @@ async def embed_project(
     except InterroAIError as exc:
         # Expected (e.g. no API key) — the message is already user-facing.
         logger.info("Indexing stopped: %s", exc)
-        yield {"step": "error", "message": str(exc)}
+        event = {"step": "error", "message": str(exc)}
+        if exc.code:
+            event["code"] = exc.code
+        yield event
     except Exception as exc:  # noqa: BLE001
         logger.exception("Unhandled error during project indexing")
         yield {"step": "error", "message": str(exc)}

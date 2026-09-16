@@ -1,52 +1,58 @@
 """
-The worker half of indexing: embed an upload, store it, prune what it replaced.
+The worker half of indexing: embed one upload, then change the index in one step.
 
 This is the code that becomes the Embed Worker in the cloud build. It receives
 one `ChunkUpload` — chunks the runtime already cut and hashed — and knows
 nothing about where they came from: it opens no project files and reads no
-`.gitignore`. That is the property that lets it run on a machine that has never
-seen the repository, and `tests/test_boundaries.py` keeps it that way.
+`.gitignore`. That is what lets it run on a machine that has never seen the
+repository, and `tests/test_boundaries.py` keeps it that way. The store and the
+cache are handed in as ports (`core/index/ports.py`), so the same code runs
+over Chroma on a laptop and pgvector in Azure.
 
-It yields the C (embedding) and D (pruning) steps and the final summary. A
+It yields the C (embedding) and D (writing) steps and the final summary. A
 failure becomes an `error` event rather than an exception, because a worker has
 no caller to raise into — it records the outcome on the job, and the client
 reads it from there.
 
-The rules carried over from the single-process indexer:
+The rules:
 
-  * **Stored batch by batch.** A job that dies on batch 59 of 60 keeps the 58
-    already paid for, and the next sync sees the rest as still changed.
-  * **Pruned after storing, not before.** A job that dies part-way leaves the
-    old vectors in place rather than a hole.
+  * **The index changes once, at the end, atomically.** Every chunk is embedded
+    first; then a single `ChunkStore.apply` upserts the new chunks, deletes the
+    stale ones and, for a forced rebuild, resets the project. A search sees the
+    index from before the job or after it, never half of each. Money already
+    spent still survives a failure: each batch lands in the `EmbeddingCache` as
+    it completes, so a retried job pays only for what never succeeded.
   * **Upserting is not enough.** Chunk ids are `file_path:start_line`, so a
     removed file, and the chunks past the new end of a file that shrank, would
     otherwise answer searches forever.
+  * **Staleness is decided when the job runs,** from what the store holds then,
+    not from what the client believed at sync time — in the cloud the two
+    moments can be minutes apart.
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 from collections.abc import AsyncIterator
 
-from contracts.indexing import ChunkUpload, IndexEvent
+from contracts.indexing import Chunk, ChunkUpload, IndexEvent
 from core.errors import InterroAIError
 from core.index.embeddings import embed_batches
-from core.index.vector_store import (
-    StoredFile,
-    chunk_id,
-    delete_ids,
-    reset_collection,
-    store_chunks,
-    stored_manifest,
-)
+from core.index.ports import ChunkStore, EmbeddingCache, IndexedChunk, StoredFile, chunk_id
 
 logger = logging.getLogger(__name__)
 
+_NOTHING_STORED = StoredFile(file_hash="", ids=())
 
-async def run_job(upload: ChunkUpload) -> AsyncIterator[IndexEvent]:
+
+async def run_job(
+    upload: ChunkUpload,
+    *,
+    store: ChunkStore,
+    cache: EmbeddingCache | None = None,
+) -> AsyncIterator[IndexEvent]:
     """Process one upload, yielding progress. Never raises; failures are events."""
     try:
-        async for event in _job_steps(upload):
+        async for event in _job_steps(upload, store, cache):
             yield event
     except InterroAIError as exc:
         # Expected (no API key, say) and already phrased for a person.
@@ -57,91 +63,116 @@ async def run_job(upload: ChunkUpload) -> AsyncIterator[IndexEvent]:
         yield IndexEvent(step="error", message=str(exc))
 
 
+def _unique(chunks: list[Chunk]) -> list[Chunk]:
+    """
+    One chunk per id, keeping the last of any that collide.
+
+    An id is `file_path:start_line`, so two chunks starting on the same line
+    describe a single storable row. Postgres refuses a statement that would
+    update one row twice, and Chroma would quietly keep whichever came last —
+    so the choice is made here instead, before the embedding bill and the
+    progress counts are calculated from it. The upload is written by the
+    client, which is why a malformed one must not be able to fail a whole job.
+    """
+    by_id = {chunk_id(chunk.file_path, chunk.start_line): chunk for chunk in chunks}
+    if len(by_id) == len(chunks):
+        return chunks
+    logger.warning(
+        "An upload carried %d chunks for only %d ids; keeping the last of each",
+        len(chunks),
+        len(by_id),
+    )
+    return list(by_id.values())
+
+
 def _stale_ids(
     upload: ChunkUpload,
     stored: dict[str, StoredFile],
-    rows: list[dict],
+    fresh: set[str],
 ) -> list[str]:
     """
     Ids this job makes obsolete: every chunk of a removed file, and every chunk
-    a changed file used to have that its new chunks do not reproduce.
+    a changed file used to have that this job is not writing again.
 
-    Decided from what the store holds when the job runs, not from what the
-    client believed at sync time. The worker is the only writer, and in the
-    cloud the two moments can be minutes apart.
+    "Not writing again" includes a chunk whose new version could not be
+    embedded: its old vector describes text the file no longer has.
     """
-    fresh = {chunk_id(row) for row in rows}
-    held = {path: stored[path].ids for path in stored}
-    stale = [key for path in upload.removed_paths for key in held.get(path, ())]
+    stale = [
+        key for path in upload.removed_paths for key in stored.get(path, _NOTHING_STORED).ids
+    ]
     stale += [
         key
         for path in upload.changed_paths
-        for key in held.get(path, ())
+        for key in stored.get(path, _NOTHING_STORED).ids
         if key not in fresh
     ]
     return stale
 
 
-async def _job_steps(upload: ChunkUpload) -> AsyncIterator[IndexEvent]:
+async def _job_steps(
+    upload: ChunkUpload,
+    store: ChunkStore,
+    cache: EmbeddingCache | None,
+) -> AsyncIterator[IndexEvent]:
     project = upload.project_id
+    # A forced rebuild discards the store, so nothing in it is worth reconciling against.
+    stored = {} if upload.reset else await store.manifest(project)
+    chunks = _unique(upload.chunks)
 
-    if upload.reset:
-        # The store itself is what the user is discarding, so there is nothing
-        # in it worth reconciling against.
-        await asyncio.to_thread(reset_collection, project)
-        stored: dict[str, StoredFile] = {}
-    else:
-        stored = await asyncio.to_thread(stored_manifest, project)
-
-    rows = [chunk.model_dump() for chunk in upload.chunks]
-    stale = _stale_ids(upload, stored, rows)
-
-    # ── C: embed, persisted batch by batch ───────────────────────────────────
-    stored_count = 0
-    cached_count = 0
+    # ── C: embed everything before anything is written ───────────────────────
+    vectors: dict[int, list[float]] = {}
+    cached = 0
     skipped: list[str] = []
 
-    if rows:
-        yield IndexEvent(step="C", status="start", total=len(rows))
+    if chunks:
+        yield IndexEvent(step="C", status="start", total=len(chunks))
 
-        async for batch in embed_batches([row["content"] for row in rows]):
-            if batch.indices:
-                batch_rows = [rows[i] for i in batch.indices]
-                await asyncio.to_thread(store_chunks, project, batch_rows, batch.vectors)
-                stored_count += len(batch_rows)
-                cached_count += batch.from_cache
-
+        async for batch in embed_batches([chunk.content for chunk in chunks], cache=cache):
+            vectors.update(zip(batch.indices, batch.vectors, strict=True))
+            cached += batch.from_cache
             for position in batch.failures:
-                # Its file's other chunks still store the current hash, so the
-                # next sync sees the file as unchanged and does not re-attempt
-                # this one. Deliberate: an item error is deterministic (over the
-                # token limit, refused content), so retrying on every run would
-                # re-pay for the chunks that *do* work to fail identically on
-                # this one. The summary reports it; a forced rebuild retries it.
-                skipped.append(rows[position]["file_path"])
+                # Deliberate: an item error is deterministic (over the token
+                # limit, refused content). The file's other chunks record its
+                # current hash, so the next sync does not retry this one and
+                # re-pay for the rest. The summary reports it; a forced rebuild
+                # retries it.
+                skipped.append(chunks[position].file_path)
 
             yield IndexEvent(
                 step="C",
                 status="progress",
-                embedded=stored_count,
-                total=len(rows),
-                cached=cached_count,
+                embedded=len(vectors),
+                total=len(chunks),
+                cached=cached,
                 skipped=len(skipped),
             )
 
         yield IndexEvent(
-            step="C", status="done", total=len(rows), cached=cached_count, skipped=len(skipped)
+            step="C", status="done", total=len(chunks), cached=cached, skipped=len(skipped)
         )
 
-    # ── D: prune what the new chunks replaced or outlived ────────────────────
+    # ── D: one write — upsert, prune and reset together ──────────────────────
+    upserts = [
+        IndexedChunk(
+            file_path=chunk.file_path,
+            start_line=chunk.start_line,
+            end_line=chunk.end_line,
+            file_hash=chunk.file_hash,
+            vector=vectors[position],
+        )
+        for position, chunk in enumerate(chunks)
+        if position in vectors
+    ]
+    stale = _stale_ids(upload, stored, fresh={chunk.id for chunk in upserts})
+
     yield IndexEvent(step="D", status="start")
-    deleted = await asyncio.to_thread(delete_ids, project, stale)
-    yield IndexEvent(step="D", status="done", stored=stored_count, deleted=deleted)
+    deleted = await store.apply(project, upserts=upserts, delete=stale, reset=upload.reset)
+    yield IndexEvent(step="D", status="done", stored=len(upserts), deleted=deleted)
 
     yield IndexEvent(
         step="done",
-        embedded=stored_count,
-        cached=cached_count,
+        embedded=len(upserts),
+        cached=cached,
         skipped=len(skipped),
         skipped_files=sorted(set(skipped)),
         deleted=deleted,

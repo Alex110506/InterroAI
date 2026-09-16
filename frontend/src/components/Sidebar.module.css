@@ -205,3 +205,26 @@
   background: var(--bg-hover);
   color: var(--text);
 }
+
+/* Signed-in cloud account */
+.account {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 10px 8px;
+  color: var(--text-3);
+  font-size: 12.5px;
+}
+
+.avatar {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.accountName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

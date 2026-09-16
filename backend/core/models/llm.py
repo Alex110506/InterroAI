@@ -37,6 +37,7 @@ from openai import (
 from tenacity import (
     before_sleep_log,
     retry,
+    retry_if_exception,
     retry_if_exception_type,
     stop_after_attempt,
     wait_exponential_jitter,
@@ -88,13 +89,35 @@ ITEM_ERRORS = (
 
 _MAX_ATTEMPTS = 4
 
-llm_retry = retry(
-    retry=retry_if_exception_type(TRANSIENT_ERRORS),
-    wait=wait_exponential_jitter(initial=1.0, max=20.0),
-    stop=stop_after_attempt(_MAX_ATTEMPTS),
-    before_sleep=before_sleep_log(logger, logging.WARNING),
-    reraise=True,
-)
+
+def _worth_retrying_a_chat(exc: BaseException) -> bool:
+    """
+    The transient failures, minus timeouts.
+
+    A chat call that timed out is not worth repeating: the same long prompt
+    takes the same long time, someone is waiting on it, and through the cloud
+    the request is cancelled at the ingress before a second attempt could
+    finish. Embeddings still retry timeouts — nobody waits on the worker, and a
+    batch that does land is cached.
+
+    `APITimeoutError` subclasses `APIConnectionError`, so it has to be ruled out
+    explicitly rather than merely left out of the tuple.
+    """
+    return isinstance(exc, TRANSIENT_ERRORS) and not isinstance(exc, APITimeoutError)
+
+
+def _retrying(condition):
+    return retry(
+        retry=condition,
+        wait=wait_exponential_jitter(initial=1.0, max=20.0),
+        stop=stop_after_attempt(_MAX_ATTEMPTS),
+        before_sleep=before_sleep_log(logger, logging.WARNING),
+        reraise=True,
+    )
+
+
+llm_retry = _retrying(retry_if_exception_type(TRANSIENT_ERRORS))
+chat_retry = _retrying(retry_if_exception(_worth_retrying_a_chat))
 
 # ── Client construction ──────────────────────────────────────────────────────
 # Each AsyncOpenAI owns an httpx.AsyncClient with its own connection pool. The
@@ -103,17 +126,35 @@ llm_retry = retry(
 # still produces a fresh client.
 _clients: dict[tuple[str, float | None, float | None], AsyncOpenAI] = {}
 
+#: A key set by the process itself. The desktop runtime leaves this unset and
+#: reads the user's OS keychain; the cloud API and worker have no keychain and
+#: set the platform key from their settings.
+_configured_key: str | None = None
+
+
+def use_api_key(key: str | None) -> None:
+    """
+    Use *key* for every client from now on, instead of the OS keychain.
+
+    For the cloud processes, whose key comes from settings — in Azure, from Key
+    Vault through an environment variable. `None` goes back to the keychain.
+    """
+    global _configured_key
+    _configured_key = key or None
+    _clients.clear()
+
 
 def get_client(timeout: httpx.Timeout) -> AsyncOpenAI:
     """
-    Return a configured client for the stored API key.
+    Return a configured client for the configured key, or else the stored one.
 
     Raises:
-        MissingAPIKeyError: if no key is present in the OS keychain. This is an
-            expected condition, not a bug — callers should surface it to the
-            user verbatim rather than treating it as a generic failure.
+        MissingAPIKeyError: if no key is configured or present in the OS
+            keychain. This is an expected condition, not a bug — callers should
+            surface it to the user verbatim rather than treating it as a
+            generic failure.
     """
-    key = retrieve_openai_key()
+    key = _configured_key or retrieve_openai_key()
     if not key:
         raise MissingAPIKeyError()
 
@@ -128,13 +169,13 @@ def get_client(timeout: httpx.Timeout) -> AsyncOpenAI:
 # ── Retrying call wrappers ───────────────────────────────────────────────────
 
 
-@llm_retry
+@chat_retry
 async def chat_completion(client: AsyncOpenAI, **kwargs):
-    """A non-streaming chat completion, retried on transient failures."""
+    """A non-streaming chat completion, retried on transient failures but not on a timeout."""
     return await client.chat.completions.create(**kwargs)
 
 
-@llm_retry
+@chat_retry
 async def chat_stream(client: AsyncOpenAI, **kwargs):
     """
     Open a streaming chat completion.

@@ -91,11 +91,18 @@ async def test_project_context_is_included_in_the_prompt():
     assert "main" in system
 
 
-async def test_classification_is_deterministic():
-    """Routing must not wobble between runs for the same request."""
+async def test_classification_sends_neither_temperature_nor_effort():
+    """
+    Every model the app offers reasons, so `temperature` is refused outright,
+    and `reasoning_effort` cannot be used anywhere while the coder's tool rounds
+    go through chat completions. Determinism comes from the prompt and JSON mode.
+    """
     gateway = _intent_gateway(json.dumps({"action": "answer"}))
     await session.classify_intent("x", {}, gateway=gateway)
-    assert gateway.requests[0]["temperature"] == 0.0
+
+    assert "temperature" not in gateway.requests[0]
+    assert "reasoning_effort" not in gateway.requests[0]
+    assert gateway.requests[0]["model"] == session._INTENT_MODEL
 
 
 async def test_classification_uses_the_fast_timeout():
@@ -127,6 +134,11 @@ def test_the_advertised_models_are_exactly_the_resolvable_ones():
 
 def test_the_default_model_is_offered_by_the_picker():
     assert session._DEFAULT_MODEL in session.AVAILABLE_MODELS
+
+
+def test_the_classifier_runs_on_an_offered_model():
+    """Routing must not name a model the gateway's allowlist would refuse."""
+    assert session._INTENT_MODEL in session.AVAILABLE_MODELS
 
 
 # ── Session routing ──────────────────────────────────────────────────────────
@@ -174,7 +186,7 @@ async def test_an_unknown_model_is_rejected_before_any_api_call():
 
     assert events[0]["type"] == "error"
     assert "Unknown model" in events[0]["message"]
-    assert "gpt-5.4-mini" in events[0]["message"], "the error should list valid ids"
+    assert "gpt-5.6-sol" in events[0]["message"], "the error should list valid ids"
     assert gateway.requests == [], "the model must be validated before the provider is touched"
 
 
@@ -193,7 +205,7 @@ async def test_omitting_the_model_uses_the_default(monkeypatch, captured_agent):
 
 async def test_an_answer_goes_straight_to_the_qa_agent(monkeypatch, captured_agent):
     _fix_intent(monkeypatch, "answer")
-    chat = ChatSession("/tmp/p", {}, model="gpt-5.4-mini")
+    chat = ChatSession("/tmp/p", {}, model="gpt-5.6-sol")
     events = await _drain(chat.start("what does this repo do?"))
 
     assert events[0]["type"] == "ready"
@@ -203,7 +215,7 @@ async def test_an_answer_goes_straight_to_the_qa_agent(monkeypatch, captured_age
 
 async def test_a_clear_request_goes_straight_to_the_coder(monkeypatch, captured_agent):
     _fix_intent(monkeypatch, "implement")
-    chat = ChatSession("/tmp/p", {}, model="gpt-5.4-mini")
+    chat = ChatSession("/tmp/p", {}, model="gpt-5.6-sol")
     events = await _drain(chat.start("rename X to Y in a.py"))
 
     assert events[0]["type"] == "ready"
@@ -215,7 +227,7 @@ async def test_a_clear_request_goes_straight_to_the_coder(monkeypatch, captured_
 async def test_the_classifier_and_the_agent_share_one_gateway(captured_agent):
     """One request must not talk to two different model backends."""
     gateway = _intent_gateway(json.dumps({"action": "implement"}))
-    chat = ChatSession("/tmp/p", {}, model="gpt-5.4-mini", gateway=gateway)
+    chat = ChatSession("/tmp/p", {}, model="gpt-5.6-sol", gateway=gateway)
     await _drain(chat.start("rename X"))
 
     assert gateway.requests, "the classifier must have used the session's gateway"
@@ -231,7 +243,7 @@ async def test_a_missing_key_becomes_a_final_error_event():
     rather than leaving each caller to catch it.
     """
     gateway = FakeGateway([MissingAPIKeyError()])
-    chat = ChatSession("/tmp/p", {}, model="gpt-5.4-mini", gateway=gateway)
+    chat = ChatSession("/tmp/p", {}, model="gpt-5.6-sol", gateway=gateway)
     events = await _drain(chat.start("hello"))
 
     assert events[-1]["type"] == "error"
@@ -244,7 +256,7 @@ async def test_an_unexpected_failure_is_reported_and_logged(monkeypatch, caplog)
         raise RuntimeError("classifier exploded")
 
     monkeypatch.setattr(session, "classify_intent", boom)
-    chat = ChatSession("/tmp/p", {}, model="gpt-5.4-mini")
+    chat = ChatSession("/tmp/p", {}, model="gpt-5.6-sol")
 
     with caplog.at_level("ERROR", logger="agents.session"):
         events = await _drain(chat.start("hello"))
@@ -259,10 +271,10 @@ async def test_a_new_session_is_independent_of_earlier_ones(monkeypatch, capture
     """Sessions are single-use and disposable, whatever conversation they were handed."""
     _fix_intent(monkeypatch, "implement")
 
-    first = ChatSession("/tmp/p", {}, model="gpt-5.4-mini")
+    first = ChatSession("/tmp/p", {}, model="gpt-5.6-sol")
     await _drain(first.start("first request"))
     second = ChatSession(
-        "/tmp/p", {}, model="gpt-5.4-mini",
+        "/tmp/p", {}, model="gpt-5.6-sol",
         history=[{"role": "user", "content": "first request"}],
     )
     await _drain(second.start("second request"))
@@ -296,7 +308,7 @@ async def test_the_conversation_reaches_the_classifier():
 
 async def test_the_conversation_reaches_the_agent(monkeypatch, captured_agent):
     _fix_intent(monkeypatch, "answer")
-    chat = ChatSession("/tmp/p", {}, model="gpt-5.4-mini", history=CONVERSATION)
+    chat = ChatSession("/tmp/p", {}, model="gpt-5.6-sol", history=CONVERSATION)
     await _drain(chat.start("sure"))
 
     assert captured_agent[0]["history"] == CONVERSATION
@@ -304,7 +316,7 @@ async def test_the_conversation_reaches_the_agent(monkeypatch, captured_agent):
 
 async def test_a_session_with_no_history_still_works(monkeypatch, captured_agent):
     _fix_intent(monkeypatch, "implement")
-    chat = ChatSession("/tmp/p", {}, model="gpt-5.4-mini")
+    chat = ChatSession("/tmp/p", {}, model="gpt-5.6-sol")
     await _drain(chat.start("do it"))
 
     assert chat.history == []
@@ -351,5 +363,5 @@ def test_a_single_oversized_turn_does_not_wedge_the_conversation():
 
 def test_the_session_trims_what_it_is_given():
     turns = [{"role": "user", "content": "z" * 9_000} for _ in range(3)]
-    chat = ChatSession("/tmp/p", {}, model="gpt-5.4-mini", history=turns)
+    chat = ChatSession("/tmp/p", {}, model="gpt-5.6-sol", history=turns)
     assert len(chat.history) < len(turns)

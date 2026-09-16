@@ -19,6 +19,11 @@ _FAKE_HOME = tempfile.mkdtemp(prefix="interroai-test-home-")
 os.environ["HOME"] = _FAKE_HOME
 os.environ["USERPROFILE"] = _FAKE_HOME  # Windows equivalent
 
+# The suite always exercises the local build. An environment variable beats a
+# `.env` file in pydantic-settings, so a developer's `.env` saying
+# INTERROAI_MODE=cloud cannot quietly route tests through the network.
+os.environ["INTERROAI_MODE"] = "local"
+
 # ── Application imports (must come after the HOME redirect) ──────────────────
 from pathlib import Path  # noqa: E402
 from types import SimpleNamespace  # noqa: E402
@@ -26,7 +31,7 @@ from types import SimpleNamespace  # noqa: E402
 import pytest  # noqa: E402
 from redis.exceptions import RedisError  # noqa: E402
 
-import core.index.vector_store as vector_store  # noqa: E402
+import core.index.adapters.chroma as vector_store  # noqa: E402
 import core.local.cache as cache_module  # noqa: E402
 import core.local.security as security  # noqa: E402
 import core.models.llm as llm_module  # noqa: E402
@@ -139,6 +144,30 @@ def fake_client():
 
 
 # ── API-key control ──────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def cloud_mode(monkeypatch):
+    """This process as a cloud client of https://api.example, for one test."""
+    from core import providers
+    from core.settings import get_runtime_settings
+
+    # Held directly: a test may monkeypatch `providers.cloud_session` itself,
+    # and that patch is still in place when this fixture tears down.
+    session_factory = providers.cloud_session
+    monkeypatch.setenv("INTERROAI_MODE", "cloud")
+    monkeypatch.setenv("INTERROAI_API_URL", "https://api.example")
+    get_runtime_settings.cache_clear()
+    session_factory.cache_clear()
+    yield
+    get_runtime_settings.cache_clear()
+    session_factory.cache_clear()
+
+
+@pytest.fixture(autouse=True)
+def no_configured_platform_key(monkeypatch):
+    """A platform key set by one test (`llm.use_api_key`) must not leak into the next."""
+    monkeypatch.setattr(llm_module, "_configured_key", None)
 
 
 @pytest.fixture
@@ -311,3 +340,193 @@ def tmp_project(tmp_path) -> Path:
     (root / "node_modules" / "pkg" / "index.js").write_text("export function v() {}\n", encoding="utf-8")  # noqa: E501
     (root / ".hidden" / "x.py").write_text("HIDDEN = 1\n", encoding="utf-8")
     return root
+
+
+# ── The local stack (integration tests only) ─────────────────────────────────
+#
+# Used by tests marked `integration`, which the default run deselects. They take
+# the stack's coordinates from the same `.env` it was started with, point both
+# database roles at the dedicated `interroai_test` database (created by
+# infra/local/postgres/init/01-roles.sh), rebuild its schema from the migrations
+# once per run, and empty every table before each test. Imports are local so an
+# ordinary run never pays for SQLAlchemy or Alembic.
+
+_TEST_DATABASE = "interroai_test"
+_CLOUD_TABLES = (
+    "users, refresh_tokens, login_codes, projects, chunks, embedding_cache, index_jobs, usage"
+)
+
+
+def _stack_unavailable(reason: str) -> None:
+    """
+    Skip for a developer who has not started the stack; fail where it was set up
+    on purpose (CI sets INTERROAI_REQUIRE_STACK=1), so a broken stack cannot turn
+    every integration test into a silent skip.
+    """
+    if os.environ.get("INTERROAI_REQUIRE_STACK") == "1":
+        pytest.fail(reason, pytrace=False)
+    pytest.skip(reason)
+
+
+@pytest.fixture(scope="session")
+def stack_settings():
+    """Whatever of the stack's coordinates `.env` provides; each fixture checks its own."""
+    from pydantic_settings import BaseSettings, SettingsConfigDict
+
+    class StackSettings(BaseSettings):
+        model_config = SettingsConfigDict(
+            env_prefix="INTERROAI_",
+            env_file=(Path(__file__).resolve().parents[2] / ".env", ".env"),
+            extra="ignore",
+        )
+        database_url: str | None = None
+        migrations_database_url: str | None = None
+        blob_connection_string: str | None = None
+        servicebus_connection_string: str | None = None
+        servicebus_queue: str = "index-jobs"
+
+    return StackSettings()
+
+
+@pytest.fixture(scope="session")
+def database_urls(stack_settings):
+    """The app-role and owner URLs, both moved onto the test database."""
+    from sqlalchemy.engine import make_url
+
+    if not (stack_settings.database_url and stack_settings.migrations_database_url):
+        _stack_unavailable("INTERROAI_DATABASE_URL / INTERROAI_MIGRATIONS_DATABASE_URL are not set")
+
+    def on_test_database(url: str) -> str:
+        return make_url(url).set(database=_TEST_DATABASE).render_as_string(hide_password=False)
+
+    return SimpleNamespace(
+        app=on_test_database(stack_settings.database_url),
+        owner=on_test_database(stack_settings.migrations_database_url),
+    )
+
+
+@pytest.fixture
+async def blob_uploads(stack_settings):
+    """A BlobUploadStore on a container of its own, so tests never touch dev uploads."""
+    from azure.core.exceptions import ServiceRequestError
+
+    from cloud.adapters.blob_uploads import BlobUploadStore
+
+    if not stack_settings.blob_connection_string:
+        _stack_unavailable("INTERROAI_BLOB_CONNECTION_STRING is not set")
+    store = BlobUploadStore.from_connection_string(
+        stack_settings.blob_connection_string, "interroai-test-uploads"
+    )
+    try:
+        await store.ensure_container()
+    except ServiceRequestError as exc:
+        await store.close()
+        _stack_unavailable(f"Azurite is not reachable ({exc}); run `docker compose up -d`.")
+    yield store
+    await store.close()
+
+
+@pytest.fixture
+async def service_bus_queue(stack_settings):
+    """The emulator's queue, drained first so no earlier test's message leaks in."""
+    from azure.servicebus.aio import ServiceBusClient
+    from azure.servicebus.exceptions import ServiceBusError
+
+    from cloud.adapters.service_bus import ServiceBusJobQueue
+
+    if not stack_settings.servicebus_connection_string:
+        pytest.skip("INTERROAI_SERVICEBUS_CONNECTION_STRING is not set")
+    connection_string = stack_settings.servicebus_connection_string
+    queue_name = stack_settings.servicebus_queue
+
+    try:
+        async with ServiceBusClient.from_connection_string(connection_string) as client:
+            async with client.get_queue_receiver(queue_name) as receiver:
+                while messages := await receiver.receive_messages(
+                    max_message_count=50, max_wait_time=1
+                ):
+                    for message in messages:
+                        await receiver.complete_message(message)
+    except (ServiceBusError, OSError) as exc:
+        _stack_unavailable(f"The Service Bus emulator is not reachable ({exc}).")
+
+    queue = ServiceBusJobQueue.from_connection_string(connection_string, queue_name)
+    yield queue
+    await queue.close()
+
+
+@pytest.fixture(scope="session")
+def migrated_database(database_urls):
+    """The test database's schema, rebuilt from the migrations once per run."""
+    from alembic import command
+    from alembic.config import Config
+
+    config = Config(str(Path(__file__).resolve().parents[1] / "cloud" / "alembic.ini"))
+    config.set_main_option("sqlalchemy.url", database_urls.owner)
+    config.attributes["configure_logger"] = False
+    try:
+        command.downgrade(config, "base")
+    except OSError as exc:
+        _stack_unavailable(f"The local stack is not reachable ({exc}); run `docker compose up -d`.")
+    command.upgrade(config, "head")
+
+
+@pytest.fixture
+async def owner_engine(migrated_database, database_urls):
+    """The owner role — bypasses row-level security, so only for arranging data."""
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    engine = create_async_engine(database_urls.owner)
+    async with engine.begin() as connection:
+        await connection.execute(text(f"TRUNCATE {_CLOUD_TABLES} CASCADE"))
+    yield engine
+    await engine.dispose()
+
+
+@pytest.fixture
+async def app_sessions(owner_engine, database_urls):
+    """Sessions as the app role, which row-level security applies to."""
+    from cloud.db.session import create_engine, create_session_factory
+
+    engine = create_engine(database_urls.app)
+    yield create_session_factory(engine)
+    await engine.dispose()
+
+
+@pytest.fixture
+def pg_new_user(owner_engine):
+    from sqlalchemy import text
+
+    async def make(login: str = "someone") -> str:
+        async with owner_engine.begin() as connection:
+            result = await connection.execute(
+                text(
+                    "INSERT INTO users (id, github_id, login) "
+                    "VALUES (gen_random_uuid(), floor(random() * 1e12)::bigint, :login) "
+                    "RETURNING id"
+                ),
+                {"login": login},
+            )
+            return str(result.scalar_one())
+
+    return make
+
+
+@pytest.fixture
+def pg_new_project(owner_engine, pg_new_user):
+    from sqlalchemy import text
+
+    async def make(owner_id: str | None = None) -> str:
+        owner_id = owner_id or await pg_new_user()
+        async with owner_engine.begin() as connection:
+            result = await connection.execute(
+                text(
+                    "INSERT INTO projects (id, owner_id, name) "
+                    "VALUES (gen_random_uuid(), :owner, 'test-project') RETURNING id"
+                ),
+                {"owner": owner_id},
+            )
+            return str(result.scalar_one())
+
+    return make

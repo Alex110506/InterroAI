@@ -134,7 +134,7 @@ async def test_every_agent_event_is_forwarded(monkeypatch):
     ]
     _stub_agent(monkeypatch, events)
     socket = RecordingSocket()
-    await supervisor.run("task", "/proj", "gpt-5.4-mini", socket)
+    await supervisor.run("task", "/proj", "gpt-5.6-sol", socket)
     assert socket.sent == events
 
 
@@ -145,14 +145,14 @@ async def test_a_disconnected_client_stops_the_stream(monkeypatch):
     """
     _stub_agent(monkeypatch, [{"type": "plan"}, {"type": "tool_call"}, {"type": "done"}])
     socket = RecordingSocket(fail_after=1)
-    await supervisor.run("task", "/proj", "gpt-5.4-mini", socket)
+    await supervisor.run("task", "/proj", "gpt-5.6-sol", socket)
     assert len(socket.sent) == 1
 
 
 async def test_the_supervisor_works_without_a_socket(monkeypatch):
     """Keeps the pipeline usable from a test harness or any non-socket caller."""
     _stub_agent(monkeypatch, [{"type": "done", "summary": "ok"}])
-    await supervisor.run("task", "/proj", "gpt-5.4-mini", None)
+    await supervisor.run("task", "/proj", "gpt-5.6-sol", None)
 
 
 async def test_the_intent_is_passed_through(monkeypatch):
@@ -166,6 +166,6 @@ async def test_the_intent_is_passed_through(monkeypatch):
             yield {"type": "done", "summary": ""}
 
     monkeypatch.setattr("agents.coder.CoderAgent", StubAgent)
-    await supervisor.run("task", "/proj", "gpt-5.4-mini", None, intent="answer")
+    await supervisor.run("task", "/proj", "gpt-5.6-sol", None, intent="answer")
     assert captured["intent"] == "answer"
-    assert captured["model"] == "gpt-5.4-mini"
+    assert captured["model"] == "gpt-5.6-sol"

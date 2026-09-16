@@ -26,7 +26,7 @@ function toHistory(messages) {
 /* ─── Embed step indicators ─────────────────────────────────────────── */
 const STEP_LABELS = { A: 'Scanning files', B: 'Chunking code', C: 'Generating embeddings', D: 'Storing vectors' }
 
-function EmbedProgress({ embedStatus, embedSteps, embedProgress }) {
+function EmbedProgress({ embedStatus, embedSteps, embedProgress, embedError }) {
   if (!embedStatus || embedStatus === 'idle') return null
   const steps = embedSteps ?? {}
   const prog = embedProgress ?? {}
@@ -43,7 +43,7 @@ function EmbedProgress({ embedStatus, embedSteps, embedProgress }) {
     return (
       <div className={s.embedErrorChip}>
         <AlertTriangle size={12} strokeWidth={2} />
-        Embedding failed — check your API key in Settings
+        {embedError || 'Embedding failed — check your API key in Settings'}
       </div>
     )
   }
@@ -72,7 +72,7 @@ function EmbedProgress({ embedStatus, embedSteps, embedProgress }) {
 
 /* ─── Project empty / indexing state ────────────────────────────────── */
 function ProjectEmptyState({ project }) {
-  const { indexStatus, index, folderName, embedStatus, embedSteps, embedProgress } = project
+  const { indexStatus, index, folderName, embedStatus, embedSteps, embedProgress, embedError } = project
 
   if (indexStatus === 'indexing') {
     return (
@@ -138,7 +138,7 @@ function ProjectEmptyState({ project }) {
         </div>
       )}
 
-      <EmbedProgress embedStatus={embedStatus} embedSteps={embedSteps} embedProgress={embedProgress} />
+      <EmbedProgress embedStatus={embedStatus} embedSteps={embedSteps} embedProgress={embedProgress} embedError={embedError} />
     </div>
   )
 }
@@ -159,19 +159,22 @@ function ThinkingBubble() {
 }
 
 const MODELS = [
-  { id: 'gpt-5.5-high-effort', label: 'GPT-5.5 High Effort' },
-  { id: 'gpt-5.5-low-effort',  label: 'GPT-5.5 Low Effort' },
-  { id: 'gpt-5.4-high-effort', label: 'GPT-5.4 High Effort' },
-  { id: 'gpt-5.4-low-effort',  label: 'GPT-5.4 Low Effort' },
-  { id: 'gpt-5.4-mini',        label: 'GPT-5.4 Mini' },
+  { id: 'gpt-5.6-sol',   label: 'GPT-5.6 Sol' },
+  { id: 'gpt-5.6-terra', label: 'GPT-5.6 Terra' },
+  { id: 'gpt-5.6-luna',  label: 'GPT-5.6 Luna' },
 ]
 
 // The model the picker starts on. Must be one of MODELS above — the backend
-// rejects any ID it doesn't recognise.
-const DEFAULT_MODEL = 'gpt-5.4-high-effort'
+// rejects any ID it cannot resolve rather than quietly substituting.
+//
+// There is no effort picker: chat completions refuses `reasoning_effort`
+// alongside function tools for this family, and the agent's middle phase is
+// function tools throughout. Offering the choice would mean moving the gateway
+// to the Responses API.
+const DEFAULT_MODEL = 'gpt-5.6-sol'
 
 /* ─── Main ChatPanel ─────────────────────────────────────────────────── */
-export default function ChatPanel({ activeId, projects, thoughtOpen, onToggleThought, onThoughtEvent, clearThought }) {
+export default function ChatPanel({ activeId, projects, thoughtOpen, onToggleThought, onThoughtEvent, clearThought, onAuthLost }) {
   const [input, setInput] = useState('')
   const [selectedModel, setSelectedModel] = useState(DEFAULT_MODEL)
   const [showModelDropdown, setShowModelDropdown] = useState(false)
@@ -256,11 +259,13 @@ export default function ChatPanel({ activeId, projects, thoughtOpen, onToggleTho
       addMessage({ role: 'agent', subtype: 'error', content: event.message })
       wsRef.current?.close()
       wsRef.current = null
+      // The cloud session ended: the app goes back to its sign-in screen.
+      if (event.code === 'not_signed_in') onAuthLost?.()
     }
-  }, [addMessage, onThoughtEvent])
+  }, [addMessage, onThoughtEvent, onAuthLost])
 
   /* ── Send handler ── */
-  const send = () => {
+  const send = async () => {
     const text = input.trim()
     if (!text || !activeId || isLoading || project?.indexStatus !== 'done') return
 
@@ -275,7 +280,14 @@ export default function ChatPanel({ activeId, projects, thoughtOpen, onToggleTho
     setIsLoading(true)
     clearThought?.()
 
-    const ws = api.openChatSocket()
+    let ws
+    try {
+      ws = await api.openChatSocket()
+    } catch (err) {
+      setIsLoading(false)
+      addMessage({ role: 'agent', subtype: 'error', content: err.message })
+      return
+    }
     wsRef.current = ws
 
     ws.onopen = () => {
@@ -317,6 +329,19 @@ export default function ChatPanel({ activeId, projects, thoughtOpen, onToggleTho
     `Ask about ${project.folderName}…`
 
   const currentModelLabel = MODELS.find(m => m.id === selectedModel)?.label ?? selectedModel
+  // Pulled out of the JSX so the picker's look lives in one place.
+  const dropdownStyle = {
+    position: 'absolute', bottom: '100%', left: 0,
+    backgroundColor: 'var(--bg)', border: '1px solid var(--border)',
+    borderRadius: '6px', padding: '4px', zIndex: 10, marginBottom: '4px',
+    width: 'max-content', display: 'flex', flexDirection: 'column', gap: '2px',
+    boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
+  }
+  const optionStyle = (selected) => ({
+    background: selected ? 'var(--bg-2)' : 'transparent',
+    border: 'none', color: 'var(--text-1)', padding: '6px 12px',
+    textAlign: 'left', borderRadius: '4px', cursor: 'pointer', fontSize: '13px',
+  })
 
   /* ── No project selected ── */
   if (!project) {
@@ -431,32 +456,22 @@ export default function ChatPanel({ activeId, projects, thoughtOpen, onToggleTho
                 <Plus size={16} strokeWidth={2} />
               </button>
               <div style={{position: 'relative'}}>
-                <button 
-                  className={s.modelBtn} 
+                <button
+                  className={s.modelBtn}
                   disabled={isLoading}
                   onClick={() => setShowModelDropdown(!showModelDropdown)}
+                  title="Which model runs the task"
                 >
                   <span>{currentModelLabel}</span>
                   <ChevronDown size={12} strokeWidth={2} />
                 </button>
                 {showModelDropdown && (
-                  <div className={s.modelDropdown} style={{
-                    position: 'absolute', bottom: '100%', left: 0, 
-                    backgroundColor: 'var(--bg)', border: '1px solid var(--border)',
-                    borderRadius: '6px', padding: '4px', zIndex: 10, marginBottom: '4px',
-                    width: 'max-content', display: 'flex', flexDirection: 'column', gap: '2px',
-                    boxShadow: '0 4px 12px rgba(0,0,0,0.1)'
-                  }}>
+                  <div className={s.modelDropdown} style={dropdownStyle}>
                     {MODELS.map(m => (
-                      <button 
+                      <button
                         key={m.id}
                         onClick={() => { setSelectedModel(m.id); setShowModelDropdown(false); }}
-                        style={{
-                          background: selectedModel === m.id ? 'var(--bg-2)' : 'transparent',
-                          border: 'none', color: 'var(--text-1)', padding: '6px 12px',
-                          textAlign: 'left', borderRadius: '4px', cursor: 'pointer',
-                          fontSize: '13px'
-                        }}
+                        style={optionStyle(selectedModel === m.id)}
                       >
                         {m.label}
                       </button>

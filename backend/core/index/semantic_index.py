@@ -13,12 +13,12 @@ file it was indexed from — never the code itself. The index stores no source
 text; the caller reads the lines from its own disk and uses the hash to tell
 whether they may have moved since.
 
-`LocalSemanticIndex` implements all four in-process: Chroma on disk as the
-store, an `InMemoryJobQueue` as the queue, a dict standing in for blob storage
-and a background task standing in for the worker. None of those is a shortcut
-the cloud build could not also take — the client half and the worker half still
-meet only through the contract models and the queue, so swapping each stand-in
-for the real service changes nothing on either side of it.
+`LocalSemanticIndex` implements all four in-process, assembled from the same
+ports the cloud side uses (`core/index/ports.py`) with local adapters plugged
+in: Chroma on disk as the `ChunkStore`, the optional Redis as the
+`EmbeddingCache`, in-memory stand-ins for Blob Storage and Service Bus, and a
+background task as the worker. The cloud worker and API assemble the same
+pieces — `diff_manifest`, `run_job` — around cloud adapters instead.
 """
 from __future__ import annotations
 
@@ -37,10 +37,13 @@ from contracts.indexing import (
     SyncRequest,
     SyncResult,
 )
+from core.index.adapters.chroma import ChromaChunkStore
+from core.index.adapters.memory import InMemoryJobQueue, InMemoryUploadStore
+from core.index.adapters.redis_cache import RedisEmbeddingCache
 from core.index.embeddings import embed_texts
 from core.index.indexer import run_job
-from core.index.job_queue import InMemoryJobQueue, JobQueue
-from core.index.vector_store import search_chunks, stored_manifest
+from core.index.manifest_diff import diff_manifest
+from core.index.ports import ChunkStore, EmbeddingCache, JobQueue, UploadStore
 
 logger = logging.getLogger(__name__)
 
@@ -70,13 +73,24 @@ class LocalSemanticIndex:
     One handle per caller: its queue, its event buffers and its worker tasks
     belong to the event loop that first uses them, so sharing one handle across
     loops would fail in ways that have nothing to do with indexing.
+
+    Every part is injectable — which is how tests hand in a spy — and defaults
+    to its local adapter.
     """
 
-    def __init__(self, queue: JobQueue | None = None) -> None:
-        self._queue = queue or InMemoryJobQueue()
-        #: Stands in for Blob Storage: the upload lives here, the queue message
-        #: only points at it.
-        self._uploads: dict[str, ChunkUpload] = {}
+    def __init__(
+        self,
+        *,
+        store: ChunkStore | None = None,
+        cache: EmbeddingCache | None = None,
+        uploads: UploadStore | None = None,
+        queue: JobQueue | None = None,
+    ) -> None:
+        # `is None`, not `or`: an empty in-memory store is falsy.
+        self._store = ChromaChunkStore() if store is None else store
+        self._cache = RedisEmbeddingCache() if cache is None else cache
+        self._uploads = InMemoryUploadStore() if uploads is None else uploads
+        self._queue = InMemoryJobQueue() if queue is None else queue
         #: Per-job progress, buffered until the client reads it. `None` marks
         #: the end of a job's stream.
         self._events: dict[str, asyncio.Queue[IndexEvent | None]] = {}
@@ -87,25 +101,11 @@ class LocalSemanticIndex:
     # ── Sync ─────────────────────────────────────────────────────────────────
 
     async def sync(self, request: SyncRequest) -> SyncResult:
-        paths = [f.file_path for f in request.files]
-        if request.force:
-            return SyncResult(changed=paths)
-
-        stored = await asyncio.to_thread(stored_manifest, request.project_id)
-
-        changed = [
-            f.file_path
-            for f in request.files
-            if not (
-                f.file_hash
-                and f.file_path in stored
-                and stored[f.file_path].file_hash == f.file_hash
-            )
-        ]
-        return SyncResult(
-            changed=changed,
-            removed=sorted(set(stored) - set(paths)),
-            unchanged=len(paths) - len(changed),
+        indexed = {} if request.force else await self._store.manifest(request.project_id)
+        return diff_manifest(
+            request.files,
+            {path: stored.file_hash for path, stored in indexed.items()},
+            force=request.force,
         )
 
     # ── Upload and job progress ──────────────────────────────────────────────
@@ -114,7 +114,7 @@ class LocalSemanticIndex:
         job_id = uuid4().hex
         upload_ref = f"uploads/{job_id}"
 
-        self._uploads[upload_ref] = upload
+        await self._uploads.put(upload_ref, upload)
         self._events[job_id] = asyncio.Queue()
         await self._queue.enqueue(
             IndexJobMessage(job_id=job_id, project_id=upload.project_id, upload_ref=upload_ref)
@@ -137,22 +137,28 @@ class LocalSemanticIndex:
             self._events.pop(job_id, None)
 
     async def _consume_one(self) -> None:
-        """The worker: take one message, fetch its upload, run the job."""
-        message = await self._queue.receive()
+        """The worker: take one delivery, fetch its upload, run the job, settle."""
+        delivery = await self._queue.receive()
+        job_id = delivery.message.job_id
+        upload_ref = delivery.message.upload_ref
         try:
-            # Claim-check: the upload is fetched by reference and then dropped,
-            # as the cloud worker deletes the blob once the job has run.
-            upload = self._uploads.pop(message.upload_ref)
-            async for event in run_job(upload):
-                self._publish(message.job_id, event)
+            upload = await self._uploads.get(upload_ref)
+            async for event in run_job(upload, store=self._store, cache=self._cache):
+                self._publish(job_id, event)
+            # Claim-check: the upload is deleted once its job has run, as the
+            # cloud worker deletes the blob.
+            await self._uploads.delete(upload_ref)
+            await delivery.complete()
         except Exception as exc:  # noqa: BLE001
             # `run_job` already turns failures into events, so this is a defect
-            # in the worker itself — still reported, or the client would wait
+            # in the worker itself. Redelivery will not fix it, so the message
+            # is dead-lettered — and still reported, or the client would wait
             # on a stream that never ends.
             logger.exception("Index worker failed outside the job")
-            self._publish(message.job_id, IndexEvent(step="error", message=str(exc)))
+            self._publish(job_id, IndexEvent(step="error", message=str(exc)))
+            await delivery.dead_letter(str(exc))
         finally:
-            self._publish(message.job_id, None)
+            self._publish(job_id, None)
 
     def _publish(self, job_id: str, event: IndexEvent | None) -> None:
         events = self._events.get(job_id)
@@ -164,6 +170,5 @@ class LocalSemanticIndex:
     # ── Search ───────────────────────────────────────────────────────────────
 
     async def search(self, request: SearchRequest) -> list[SearchHit]:
-        [vector] = await embed_texts([request.query])
-        rows = await asyncio.to_thread(search_chunks, request.project_id, vector, request.n)
-        return [SearchHit(**row) for row in rows]
+        [vector] = await embed_texts([request.query], cache=self._cache)
+        return await self._store.search(request.project_id, vector, request.n)

@@ -12,6 +12,7 @@ from conftest import FakeGateway, make_response
 from fastapi.testclient import TestClient
 
 import agents.session as session
+import core.index.adapters.chroma as chroma
 import core.index.indexer as indexer
 import core.index.semantic_index as semantic_index
 import core.workspace.project_index as project_index
@@ -55,7 +56,7 @@ def _start(**overrides):
         "project_path": "/tmp/proj",
         "project_index": {},
         "message": "do the thing",
-        "model": "gpt-5.4-mini",
+        "model": "gpt-5.6-sol",
     }
     payload.update(overrides)
     return payload
@@ -93,11 +94,11 @@ def test_the_selected_model_reaches_the_supervisor(client, monkeypatch, captured
     """Auto-routing is gone, so whatever the user picked must be used verbatim."""
     _fix_intent(monkeypatch, "implement")
     with client.websocket_connect("/api/chat/ws") as ws:
-        ws.send_json(_start(model="gpt-5.5-high-effort"))
+        ws.send_json(_start(model="gpt-5.6-terra"))
         ws.receive_json()
         ws.receive_json()
 
-    assert captured_supervisor[0]["model"] == "gpt-5.5-high-effort"
+    assert captured_supervisor[0]["model"] == "gpt-5.6-terra"
 
 
 def test_omitting_the_model_falls_back_to_the_default(client, monkeypatch, captured_supervisor):
@@ -137,11 +138,10 @@ def stub_embedding(monkeypatch):
 
     def fake_store(path, chunks, embeddings):
         stored["path"] = path
-        # Called once per batch now, so accumulate rather than overwrite.
         stored.setdefault("chunks", []).extend(chunks)
 
     monkeypatch.setattr(indexer, "embed_batches", fake_batches)
-    monkeypatch.setattr(indexer, "store_chunks", fake_store)
+    monkeypatch.setattr(chroma, "store_chunks", fake_store)
     return stored
 
 
@@ -250,7 +250,7 @@ async def test_a_search_after_indexing_reads_the_code_back_from_disk(
     events = [e async for e in project_index.embed_project(tmp_project)]
     assert events[-1]["step"] == "done"
 
-    out = await CoderAgent(str(tmp_project), "gpt-5.4-mini")._search_semantic("greeting", n=10)
+    out = await CoderAgent(str(tmp_project), "gpt-5.6-sol")._search_semantic("greeting", n=10)
     assert "class Greeter" in out
     assert "stale" not in out
 
@@ -261,20 +261,21 @@ async def test_a_search_after_indexing_reads_the_code_back_from_disk(
 async def test_planning_streams_tokens_then_the_full_plan(tmp_project):
     """The right-hand panel fills live, so tokens must arrive individually."""
     gateway = FakeGateway(streams=[["1. ", "read ", "main.py"]])
-    agent = CoderAgent(str(tmp_project), "gpt-5.4-mini", gateway=gateway)
+    agent = CoderAgent(str(tmp_project), "gpt-5.6-sol", gateway=gateway)
     events = [e async for e in agent._plan("task", "TREE")]
 
     assert [e["chunk"] for e in events if e["type"] == "plan_chunk"] == ["1. ", "read ", "main.py"]
     assert events[-1] == {"type": "plan", "content": "1. read main.py"}
 
 
-async def test_reasoning_models_plan_in_a_single_shot(tmp_project):
+async def test_models_that_cannot_stream_plan_in_a_single_shot(tmp_project):
     """
-    o1-family streaming is unreliable, so that path must not be used — the
-    gateway has no stream queued, and would fail the test if asked for one.
+    The o1 family's streaming is unreliable, so that path must not be used —
+    the gateway has no stream queued and would fail if asked for one. Every
+    model the app itself offers does stream, which the test above covers.
     """
     gateway = FakeGateway([make_response(content="1. do the thing")])
-    agent = CoderAgent(str(tmp_project), "gpt-5.5-high-effort", gateway=gateway)
+    agent = CoderAgent(str(tmp_project), "o1", gateway=gateway)
     events = [e async for e in agent._plan("task", "TREE")]
 
     assert events[-1] == {"type": "plan", "content": "1. do the thing"}
@@ -282,7 +283,7 @@ async def test_reasoning_models_plan_in_a_single_shot(tmp_project):
 
 async def test_empty_stream_tokens_are_ignored(tmp_project):
     gateway = FakeGateway(streams=[["a", "", None, "b"]])
-    agent = CoderAgent(str(tmp_project), "gpt-5.4-mini", gateway=gateway)
+    agent = CoderAgent(str(tmp_project), "gpt-5.6-sol", gateway=gateway)
     events = [e async for e in agent._plan("task", "TREE")]
 
     assert len([e for e in events if e["type"] == "plan_chunk"]) == 2
@@ -291,7 +292,7 @@ async def test_empty_stream_tokens_are_ignored(tmp_project):
 
 async def test_a_full_implement_run_emits_the_expected_event_sequence(tmp_project, monkeypatch):
     """plan -> tools -> summary -> validation -> done."""
-    agent = CoderAgent(str(tmp_project), "gpt-5.4-mini")
+    agent = CoderAgent(str(tmp_project), "gpt-5.6-sol")
 
     async def fake_plan(prompt, tree):
         yield {"type": "plan", "content": "the plan"}
@@ -315,7 +316,7 @@ async def test_a_full_implement_run_emits_the_expected_event_sequence(tmp_projec
 async def test_an_unexpected_failure_mid_run_is_logged_and_reported(
     tmp_project, monkeypatch, caplog
 ):
-    agent = CoderAgent(str(tmp_project), "gpt-5.4-mini")
+    agent = CoderAgent(str(tmp_project), "gpt-5.6-sol")
 
     async def boom(prompt, tree):
         raise RuntimeError("something broke")

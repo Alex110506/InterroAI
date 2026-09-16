@@ -41,7 +41,7 @@ def test_an_unknown_model_is_rejected(client):
         event = ws.receive_json()
     assert event["type"] == "error"
     assert "Unknown model" in event["message"]
-    assert "gpt-5.4-mini" in event["message"], "the error should list valid ids"
+    assert "gpt-5.6-sol" in event["message"], "the error should list valid ids"
 
 
 def test_the_removed_auto_sentinel_is_rejected(client):
@@ -80,7 +80,7 @@ def test_a_missing_key_reaches_the_user_as_a_clear_error(client, without_api_key
     in `core.models.llm` survives the session and the WebSocket handler intact.
     """
     with client.websocket_connect("/api/chat/ws") as ws:
-        ws.send_json(_start(model="gpt-5.4-mini"))
+        ws.send_json(_start(model="gpt-5.6-sol"))
         event = ws.receive_json()
     assert event["type"] == "error"
     assert "API key" in event["message"]

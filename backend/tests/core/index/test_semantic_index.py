@@ -14,10 +14,10 @@ import pytest
 import core.index.indexer as indexer
 import core.index.semantic_index as semantic_index
 from contracts.indexing import Chunk, ChunkUpload, FileState, SearchRequest, SyncRequest
+from core.index.adapters.chroma import store_chunks, stored_manifest
+from core.index.adapters.memory import InMemoryJobQueue, InMemoryUploadStore
 from core.index.embeddings import EmbeddedBatch
-from core.index.job_queue import InMemoryJobQueue
 from core.index.semantic_index import LocalSemanticIndex
-from core.index.vector_store import store_chunks, stored_manifest
 
 VECTOR = [0.1, 0.2, 0.3, 0.4]
 
@@ -166,31 +166,34 @@ async def test_the_queue_carries_a_pointer_and_the_upload_is_dropped_after_use(
             sent.append(message)
             await super().enqueue(message)
 
-    index = LocalSemanticIndex(queue=RecordingQueue())
+    uploads = InMemoryUploadStore()
+    index = LocalSemanticIndex(queue=RecordingQueue(), uploads=uploads)
     job_id = await index.upload(_upload(project))
     await _events(index, job_id)
 
     [message] = sent
     assert message.job_id == job_id
     assert message.project_id == project
-    assert index._uploads == {}, "a claim-checked upload is discarded once its job has run"
+    assert len(uploads) == 0, "a claim-checked upload is discarded once its job has run"
 
 
 async def test_a_defect_in_the_worker_still_ends_the_event_stream(
     project, isolated_chroma, monkeypatch
 ):
     """Otherwise a bug outside the job would leave the client waiting forever."""
-    async def broken_run_job(upload):
+    async def broken_run_job(upload, **kwargs):
         raise RuntimeError("worker bug")
         yield  # pragma: no cover
 
     monkeypatch.setattr(semantic_index, "run_job", broken_run_job)
-    index = LocalSemanticIndex()
+    queue = InMemoryJobQueue()
+    index = LocalSemanticIndex(queue=queue)
 
     events = await asyncio.wait_for(_events(index, await index.upload(_upload(project))), 5)
 
     assert events[-1].step == "error"
     assert "worker bug" in events[-1].message
+    assert len(queue.dead_letters) == 1, "a defect will not fix itself on redelivery"
 
 
 async def test_an_unknown_job_reports_an_error(isolated_chroma):

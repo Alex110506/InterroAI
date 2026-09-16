@@ -4,7 +4,7 @@ Chat session — the agent pipeline, independent of any transport.
 One user message flows through two steps:
 
   Step 1 — Intent classification (2-way):
-    gpt-5.4-mini classifies the user's request as one of:
+    A fast model classifies the user's request as one of:
       • "answer"    — general question; reply directly with Markdown
       • "implement" — implementation task; go straight to the coder
 
@@ -48,19 +48,23 @@ logger = logging.getLogger(__name__)
 # Used when the caller omits a model entirely. Any value that *is* supplied
 # must be a known display ID — we reject unknown ones rather than silently
 # substituting a different (possibly pricier) model.
-_DEFAULT_MODEL = "gpt-5.4-high-effort"
+_DEFAULT_MODEL = "gpt-5.6-sol"
 
 #: Display IDs a caller may choose from, best-first. `test_session.py` holds
 #: this equal to the coder's model map, so validation cannot drift from what the
 #: coder resolves. (The Electron picker keeps its own copy, `MODELS` in
 #: `frontend/src/components/ChatPanel.jsx`, which nothing checks.)
 AVAILABLE_MODELS: tuple[str, ...] = (
-    "gpt-5.5-high-effort",
-    "gpt-5.5-low-effort",
-    "gpt-5.4-high-effort",
-    "gpt-5.4-low-effort",
-    "gpt-5.4-mini",
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
 )
+
+#: What the intent classifier runs on — a model of its own, so changing the
+#: picker's default never changes the cost of routing. It sends no tools, so it
+#: keeps the model's default reasoning; `coder._build_create_kwargs` explains
+#: why the tool rounds have to switch reasoning off instead.
+_INTENT_MODEL = "gpt-5.6-luna"
 
 _INTENT_SYSTEM = """\
 You are a routing agent for an AI coding assistant. Classify the user's request into exactly one of two actions:
@@ -114,6 +118,7 @@ def unknown_model_message(model: str) -> str:
     )
 
 
+
 def _fmt_tree(node: dict, depth: int = 0, max_depth: int = 4) -> str:
     if depth > max_depth or not node:
         return ""
@@ -161,16 +166,19 @@ async def classify_intent(
     context = f"PROJECT STRUCTURE:\n{tree_str or '(empty)'}\n\nGIT CONTEXT:\n{git_str}"
 
     gateway = gateway or providers.model_gateway()
+    # No `temperature`: every model the app offers reasons, and a reasoning model
+    # refuses it outright. No `reasoning_effort` either — this call sends no
+    # tools, so the model's default reasoning is allowed, and welcome, here.
+    # Determinism comes from the prompt and JSON mode.
     response = await gateway.chat(
         timeout=FAST_TIMEOUT,
-        model="gpt-5.4-mini",
+        model=_INTENT_MODEL,
         messages=[
             {"role": "system", "content": f"{_INTENT_SYSTEM}\n\n{context}"},
             *trim_history(history),
             {"role": "user", "content": user_message},
         ],
         response_format={"type": "json_object"},
-        temperature=0.0,
     )
 
     raw = response.choices[0].message.content
@@ -282,10 +290,15 @@ class ChatSession:
             async for event in stream:
                 yield event
         except InterroAIError as exc:
-            # Expected and already phrased for a human (missing key, bad model).
+            # Expected and already phrased for a human (missing key, bad model,
+            # signed out of the cloud). A `code`, when there is one, lets the app
+            # act on it rather than only show it.
             logger.info("Chat session ended: %s", exc)
             self.finished = True
-            yield {"type": "error", "message": str(exc)}
+            event = {"type": "error", "message": str(exc)}
+            if exc.code:
+                event["code"] = exc.code
+            yield event
         except Exception as exc:  # noqa: BLE001
             # Unexpected: keep the traceback. The caller still gets the message,
             # since this is a local single-user tool and the alternative is a

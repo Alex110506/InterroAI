@@ -32,7 +32,7 @@ from core.workspace.sandbox import CheckResult, CheckStatus
 
 @pytest.fixture
 def agent(tmp_project):
-    return CoderAgent(project_path=str(tmp_project), model="gpt-5.4-mini")
+    return CoderAgent(project_path=str(tmp_project), model="gpt-5.6-sol")
 
 
 async def drain(generator):
@@ -50,11 +50,40 @@ def _async(value):
 
 
 def test_every_display_id_maps_to_an_api_id():
-    assert _MODEL_MAP and all(isinstance(v, str) and v for v in _MODEL_MAP.values())
+    assert _MODEL_MAP and all(isinstance(api, str) and api for api in _MODEL_MAP.values())
 
 
-def test_display_id_is_translated(tmp_path):
-    assert CoderAgent(str(tmp_path), "gpt-5.5-high-effort")._api_model == "gpt-5.5"
+def test_a_tools_request_switches_reasoning_off(tmp_path):
+    """
+    These models reason by default and chat completions refuses tools alongside
+    reasoning, so a tools request has to say "none" out loud. Omitting the
+    parameter is not the same thing — that was the 400: a body carrying no
+    `reasoning_effort` at all, rejected for having one.
+    """
+    agent = CoderAgent(str(tmp_path), "gpt-5.6-sol")
+
+    kwargs = agent._build_create_kwargs([], tools=[{"t": 1}], tool_choice="auto")
+
+    assert kwargs["reasoning_effort"] == "none"
+
+
+def test_a_tools_free_call_keeps_the_models_own_reasoning(tmp_path):
+    """The plan and the classifier send no tools, so reasoning is left alone."""
+    kwargs = CoderAgent(str(tmp_path), "gpt-5.6-sol")._build_create_kwargs([])
+    assert "reasoning_effort" not in kwargs
+
+
+def test_reasoning_is_not_switched_off_for_a_model_that_never_reasons(tmp_path):
+    """An ordinary model does not accept `reasoning_effort` at all, "none" included."""
+    agent = CoderAgent(str(tmp_path), "gpt-4o-mini")
+
+    kwargs = agent._build_create_kwargs([], tools=[{"t": 1}], tool_choice="auto")
+
+    assert "reasoning_effort" not in kwargs
+
+
+def test_a_known_display_id_resolves_to_its_api_id(tmp_path):
+    assert CoderAgent(str(tmp_path), "gpt-5.6-terra")._api_model == "gpt-5.6-terra"
 
 
 def test_unknown_id_passes_through_unchanged(tmp_path):
@@ -62,28 +91,29 @@ def test_unknown_id_passes_through_unchanged(tmp_path):
     assert CoderAgent(str(tmp_path), "gpt-4o-mini")._api_model == "gpt-4o-mini"
 
 
-@pytest.mark.parametrize("display", ["gpt-5.4-low-effort", "gpt-5.5-high-effort"])
+@pytest.mark.parametrize("display", ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])
 def test_reasoning_models_are_detected(tmp_path, display):
     assert CoderAgent(str(tmp_path), display)._is_reasoning is True
 
 
 def test_non_reasoning_model_is_detected(tmp_path):
-    assert CoderAgent(str(tmp_path), "gpt-5.4-mini")._is_reasoning is False
+    """A raw OpenAI id passes through the map, so older families still resolve."""
+    assert CoderAgent(str(tmp_path), "gpt-4o-mini")._is_reasoning is False
 
 
 def test_temperature_is_omitted_for_reasoning_models(tmp_path):
     """Reasoning models reject `temperature` outright — sending it is a 400."""
-    a = CoderAgent(str(tmp_path), "gpt-5.5-high-effort")
+    a = CoderAgent(str(tmp_path), "gpt-5.6-sol")
     assert "temperature" not in a._build_create_kwargs([], temperature=0.2)
 
 
 def test_temperature_is_sent_for_ordinary_models(tmp_path):
-    a = CoderAgent(str(tmp_path), "gpt-5.4-mini")
+    a = CoderAgent(str(tmp_path), "gpt-4o-mini")
     assert a._build_create_kwargs([], temperature=0.2)["temperature"] == 0.2
 
 
 def test_extra_kwargs_are_forwarded(tmp_path):
-    a = CoderAgent(str(tmp_path), "gpt-5.4-mini")
+    a = CoderAgent(str(tmp_path), "gpt-5.6-sol")
     kwargs = a._build_create_kwargs([], tools=[{"t": 1}], tool_choice="auto")
     assert kwargs["tools"] == [{"t": 1}] and kwargs["tool_choice"] == "auto"
 
@@ -131,7 +161,7 @@ def test_a_sibling_prefix_directory_is_rejected(tmp_path):
     """`startswith` would wrongly accept `/x/proj-evil` as inside `/x/proj`."""
     (tmp_path / "proj").mkdir()
     (tmp_path / "proj-evil").mkdir()
-    a = CoderAgent(str(tmp_path / "proj"), "gpt-5.4-mini")
+    a = CoderAgent(str(tmp_path / "proj"), "gpt-5.6-sol")
     with pytest.raises(PathEscapeError):
         a._resolve("../proj-evil/x.py")
 
@@ -360,7 +390,7 @@ async def test_corrections_are_bounded(agent, monkeypatch):
 
 
 async def test_a_missing_project_directory_is_an_error_event(tmp_path):
-    a = CoderAgent(str(tmp_path / "nope"), "gpt-5.4-mini")
+    a = CoderAgent(str(tmp_path / "nope"), "gpt-5.6-sol")
     events = await drain(a.execute("do something"))
     assert events[0]["type"] == "error"
     assert "not found" in events[0]["message"]
@@ -368,7 +398,7 @@ async def test_a_missing_project_directory_is_an_error_event(tmp_path):
 
 async def test_a_missing_api_key_is_surfaced_verbatim(tmp_project, without_api_key):
     """The user must be told to add a key, not shown a generic failure."""
-    a = CoderAgent(str(tmp_project), "gpt-5.4-mini")
+    a = CoderAgent(str(tmp_project), "gpt-5.6-sol")
     events = await drain(a.execute("do something"))
     assert events[0]["type"] == "error"
     assert "API key" in events[0]["message"]
@@ -382,7 +412,7 @@ async def test_the_answer_intent_never_exposes_write_tools(tmp_project, monkeypa
         captured["tools"] = tools
         yield {"type": "impl_done", "content": "an answer"}
 
-    a = CoderAgent(str(tmp_project), "gpt-5.4-mini", intent="answer")
+    a = CoderAgent(str(tmp_project), "gpt-5.6-sol", intent="answer")
     monkeypatch.setattr(a, "_tool_loop", fake_loop)
 
     events = await drain(a.execute("how does this work?"))
@@ -459,7 +489,7 @@ async def test_knowledge_tree_contains_the_repo_map(agent):
 
 
 async def test_knowledge_tree_survives_an_empty_project(tmp_path):
-    a = CoderAgent(str(tmp_path), "gpt-5.4-mini")
+    a = CoderAgent(str(tmp_path), "gpt-5.6-sol")
     assert "(empty)" in await a._build_knowledge_tree()
 
 
@@ -539,7 +569,7 @@ def _hit(project, path="main.py", start=4, end=6, *, indexed_hash=None):
 
 def _searching_agent(project, hits):
     index = FakeIndex(hits)
-    return CoderAgent(str(project), "gpt-5.4-mini", index=index), index
+    return CoderAgent(str(project), "gpt-5.6-sol", index=index), index
 
 
 async def test_search_reads_the_code_from_the_working_tree(tmp_project):
@@ -642,7 +672,7 @@ async def test_a_question_sees_the_earlier_turns(tmp_project, monkeypatch):
     The reported bug: a follow-up reached the Q&A agent with no conversation,
     so "sure" had nothing to agree to.
     """
-    agent = CoderAgent(str(tmp_project), "gpt-5.4-mini", intent="answer", history=_PRIOR)
+    agent = CoderAgent(str(tmp_project), "gpt-5.6-sol", intent="answer", history=_PRIOR)
     messages = await _captured_messages(agent, monkeypatch, "sure")
 
     contents = [m["content"] for m in messages]
@@ -652,7 +682,7 @@ async def test_a_question_sees_the_earlier_turns(tmp_project, monkeypatch):
 
 
 async def test_an_implementation_sees_the_earlier_turns(tmp_project, monkeypatch):
-    agent = CoderAgent(str(tmp_project), "gpt-5.4-mini", history=_PRIOR)
+    agent = CoderAgent(str(tmp_project), "gpt-5.6-sol", history=_PRIOR)
 
     async def fake_plan(prompt, tree):
         yield {"type": "plan", "content": "the plan"}
@@ -666,9 +696,9 @@ async def test_an_implementation_sees_the_earlier_turns(tmp_project, monkeypatch
 
 
 async def test_planning_sees_the_earlier_turns(tmp_project):
-    gateway = FakeGateway([make_response(content="1. do it")])
+    gateway = FakeGateway(streams=[["1. do it"]])
     agent = CoderAgent(
-        str(tmp_project), "gpt-5.5-high-effort", history=_PRIOR, gateway=gateway
+        str(tmp_project), "gpt-5.6-terra", history=_PRIOR, gateway=gateway
     )
     [e async for e in agent._plan("now add tests", "<repo_map/>")]
 
@@ -678,6 +708,6 @@ async def test_planning_sees_the_earlier_turns(tmp_project):
 
 async def test_no_history_leaves_the_prompt_unchanged(tmp_project, monkeypatch):
     """The default path must not grow an empty turn."""
-    agent = CoderAgent(str(tmp_project), "gpt-5.4-mini", intent="answer")
+    agent = CoderAgent(str(tmp_project), "gpt-5.6-sol", intent="answer")
     messages = await _captured_messages(agent, monkeypatch, "what is this?")
     assert len(messages) == 2, "system + the request, nothing else"

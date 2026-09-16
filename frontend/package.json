@@ -4,10 +4,11 @@
   "description": "AI Multi-Agent Orchestration Platform",
   "main": "main.js",
   "scripts": {
-    "dev": "concurrently -k -n BACKEND,VITE,ELECTRON -c green,cyan,yellow \"cd ../backend && python3 -m uvicorn main:app --reload --port 8000\" \"vite\" \"wait-on http-get://localhost:8000/health http-get://localhost:5173 && NODE_ENV=development electron .\"",
+    "dev": "concurrently -k -n VITE,ELECTRON -c cyan,yellow \"vite\" \"wait-on http-get://localhost:5173 && NODE_ENV=development electron .\"",
     "build": "vite build",
     "backend": "cd ../backend && python3 -m uvicorn main:app --reload --port 8000",
     "electron": "NODE_ENV=development electron .",
+    "test": "node --test electron/*.test.js",
     "start": "npm run dev"
   },
   "dependencies": {

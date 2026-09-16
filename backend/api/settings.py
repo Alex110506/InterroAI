@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 
 from config import app_config
 from core.local.security import retrieve_openai_key, store_openai_key
+from core.settings import get_runtime_settings
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -20,14 +21,17 @@ class SettingsSaveRequest(BaseModel):
 class SettingsResponse(BaseModel):
     name: str
     has_api_key: bool
+    #: "cloud" means the platform holds the model key, so the app hides the key field.
+    mode: str
 
 
 @router.get("", response_model=SettingsResponse)
 async def get_settings() -> SettingsResponse:
-    """Return current user name and whether an API key is stored."""
+    """Return current user name, whether an API key is stored, and the runtime's mode."""
     return SettingsResponse(
         name=app_config.get("user_name", ""),
         has_api_key=bool(retrieve_openai_key()),
+        mode=get_runtime_settings().mode,
     )
 
 

@@ -21,6 +21,10 @@ from __future__ import annotations
 class InterroAIError(Exception):
     """Base class for every error InterroAI raises deliberately."""
 
+    #: A stable name the app can act on, sent beside the message in error events.
+    #: None for errors that are only ever shown.
+    code: str | None = None
+
 
 class MissingAPIKeyError(InterroAIError):
     """No OpenAI API key is stored in the OS keychain."""
@@ -63,3 +67,45 @@ class FileNotFoundInProjectError(ToolError):
 
 class PatchError(ToolError):
     """A patch could not be applied (search block missing or ambiguous)."""
+
+
+# ── The cloud ────────────────────────────────────────────────────────────────
+# Raised by the Cloud API clients in `core/remote/`. Each carries a `code`, so
+# the app can react to it (show the sign-in screen, say the day's allowance is
+# used up) without matching on message text.
+
+
+class CloudError(InterroAIError):
+    """The InterroAI cloud refused or failed a request."""
+
+    code = "cloud_error"
+    default_message = "The InterroAI cloud refused the request."
+
+    def __init__(
+        self,
+        message: str | None = None,
+        *,
+        code: str | None = None,
+        details: dict | None = None,
+    ) -> None:
+        super().__init__(message or self.default_message)
+        if code:
+            self.code = code
+        #: The API's error detail as sent, e.g. the running job's id beside
+        #: `job_already_running`.
+        self.details = details or {}
+
+
+class NotSignedInError(CloudError):
+    code = "not_signed_in"
+    default_message = "Sign in to InterroAI to continue."
+
+
+class QuotaExceededError(CloudError):
+    code = "quota_exceeded"
+    default_message = "Today's InterroAI allowance is used up. It resets at midnight UTC."
+
+
+class CloudUnavailableError(CloudError):
+    code = "cloud_unavailable"
+    default_message = "The InterroAI cloud can't be reached right now."

@@ -43,18 +43,29 @@ logger = logging.getLogger(__name__)
 _MAX_TOOL_ROUNDS = 20
 _MAX_CORRECTIONS = 3
 
-# Map display-facing model IDs to real OpenAI API model IDs
+# Map display-facing model IDs to real OpenAI API model IDs. They are identical
+# for the GPT-5.6 family; the indirection stays because it is also what decides
+# whether a caller's choice is valid (`agents/session.py`) and where an alias
+# for a renamed model would go. Effort is chosen separately, per request.
 _MODEL_MAP: dict[str, str] = {
-    "gpt-5.4-mini":        "gpt-5.4-mini",
-    "gpt-5.4-low-effort":  "gpt-5.4",
-    "gpt-5.4-high-effort": "gpt-5.4",
-    "gpt-5.5-low-effort":  "gpt-5.5",
-    "gpt-5.5-high-effort": "gpt-5.5",
+    "gpt-5.6-sol":   "gpt-5.6-sol",
+    "gpt-5.6-terra": "gpt-5.6-terra",
+    "gpt-5.6-luna":  "gpt-5.6-luna",
 }
 
-# Reasoning models require temperature to be omitted
-# gpt-5.4 and gpt-5.5 are high-reasoning models — omit temperature to avoid API errors
-_REASONING_MODELS = {"gpt-5.5", "gpt-5.4", "o1", "o1-mini", "o1-preview", "o3", "o3-mini", "o4-mini"}  # noqa: E501
+# Reasoning models reject `temperature` and take `reasoning_effort` instead.
+# Every GPT-5.6 model reasons; the o-series stays listed because a raw OpenAI
+# id passes through `_MODEL_MAP` unchanged and must still be handled correctly.
+_REASONING_MODELS = {
+    "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
+    "o1", "o1-mini", "o1-preview", "o3", "o3-mini", "o4-mini",
+}
+
+# Models whose streaming is unreliable, so their plan is fetched in one call.
+# Only the o1 family. This used to be gated on "is it a reasoning model", which
+# was the same set in practice — but now every model the app offers reasons, and
+# that would silence the streamed plan the right-hand panel exists to show.
+_NO_STREAM_MODELS = {"o1", "o1-mini", "o1-preview"}
 
 # ── Tool schemas ──────────────────────────────────────────────────────────────
 
@@ -220,7 +231,7 @@ class CoderAgent:
         # request so a follow-up ("now the other one") has a referent.
         self._history: list[dict] = list(history or [])
         self._path = Path(project_path).resolve()
-        self._api_model = _MODEL_MAP.get(model, model)   # resolve display ID → real API ID
+        self._api_model = _MODEL_MAP.get(model, model)   # display ID → real API ID
         self._is_reasoning = self._api_model in _REASONING_MODELS
         # Where model calls and semantic searches go. The agent neither knows
         # nor cares whether that is OpenAI and a local index, or the cloud.
@@ -295,6 +306,15 @@ class CoderAgent:
 
     def _build_create_kwargs(self, messages: list[dict], temperature: float = 0.2, **extra) -> dict:
         kwargs: dict = {"model": self._api_model, "messages": messages, **extra}
+        # These models reason by default, and chat completions refuses function
+        # tools together with reasoning — so a tools request must switch it off
+        # explicitly. Omitting the parameter is NOT the same as "none": the 400
+        # that cost an afternoon ("Function tools with reasoning_effort are not
+        # supported ... use /v1/responses or set reasoning_effort to 'none'")
+        # arrived on a body that never carried the key at all. Tools-free calls —
+        # the plan, and the classifier — keep the model's own default reasoning.
+        if self._is_reasoning and kwargs.get("tools"):
+            kwargs["reasoning_effort"] = "none"
         if not self._is_reasoning:
             kwargs["temperature"] = temperature
         return kwargs
@@ -306,8 +326,8 @@ class CoderAgent:
             {"role": "user", "content": f"{knowledge_tree}\n\nTASK:\n{prompt}"},
         ]
 
-        if self._is_reasoning:
-            # o1-family doesn't stream reliably — single-shot call
+        if self._api_model in _NO_STREAM_MODELS:
+            # Streaming is unreliable here, so take the whole plan in one call.
             response = await self._gateway.chat(
                 timeout=LONG_TIMEOUT,
                 **self._build_create_kwargs(messages=messages, temperature=0.2),
