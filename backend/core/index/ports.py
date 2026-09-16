@@ -100,6 +100,9 @@ class ChunkStore(Protocol):
         upserts *upserts*. Returns how many of the *delete* ids were removed.
         Atomic where the store can be (Postgres: one transaction), so a search
         sees the index from before the job or after it, never half of each.
+
+        *upserts* holds at most one chunk per id, which `indexer.run_job`
+        guarantees: no store can write the same id twice in one statement.
         """
         ...
 

@@ -103,6 +103,29 @@ async def test_a_job_with_nothing_to_embed_makes_no_embedding_call(
     assert events[-1].step == "done"
 
 
+async def test_two_chunks_claiming_one_id_are_stored_once(
+    project, embedded, isolated_chroma, caplog
+):
+    """
+    An upload is written by the client, and ids are `file_path:start_line`.
+    Postgres refuses a statement that would update one row twice, so the
+    collision is settled here — before anything is embedded or stored.
+    """
+    upload = ChunkUpload(
+        project_id=project,
+        chunks=[_chunk(start=7, content="first"), _chunk(start=7, content="second")],
+        changed_paths=["a.py"],
+    )
+
+    with caplog.at_level("WARNING", logger="core.index.indexer"):
+        events = await _run(upload)
+
+    assert embedded == [["second"]], "only the surviving chunk is paid for"
+    assert stored_manifest(project)["a.py"].ids == ("a.py:7",)
+    assert events[-1].embedded == 1
+    assert "keeping the last of each" in caplog.text
+
+
 # ── One write, at the end ────────────────────────────────────────────────────
 
 

@@ -121,6 +121,24 @@ def test_reported_start_line_matches_the_chunk_content(tmp_path):
         assert first_content_line in source_lines[chunk["start_line"] - 1]
 
 
+def test_chunks_that_would_share_a_start_line_are_collapsed(tmp_path):
+    """
+    A chunk's id is its file and its start line, so two chunks cannot begin on
+    the same line. One line longer than the chunk size less the overlap gets cut
+    inside itself, and every piece maps back to that one line.
+    """
+    path = tmp_path / "wide.tsx"
+    wide = "const classes = [" + ", ".join(f'"class-{i}"' for i in range(300)) + "]"
+    path.write_text(f"import x from 'y'\n{wide}\nexport default x\n", encoding="utf-8")
+
+    chunks = chunk_file(path, tmp_path)
+
+    starts = [chunk["start_line"] for chunk in chunks]
+    assert starts, "the file is indexable, so it must produce chunks"
+    assert len(starts) == len(set(starts)), "a store cannot hold two chunks under one id"
+    assert max(chunk["end_line"] for chunk in chunks) >= 3, "the surviving chunk covers the rest"
+
+
 def test_no_chunk_is_blank(tmp_path):
     path = tmp_path / "gaps.py"
     path.write_text("a = 1\n\n\n\n\n\nb = 2\n", encoding="utf-8")

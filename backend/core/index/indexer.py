@@ -34,10 +34,10 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncIterator
 
-from contracts.indexing import ChunkUpload, IndexEvent
+from contracts.indexing import Chunk, ChunkUpload, IndexEvent
 from core.errors import InterroAIError
 from core.index.embeddings import embed_batches
-from core.index.ports import ChunkStore, EmbeddingCache, IndexedChunk, StoredFile
+from core.index.ports import ChunkStore, EmbeddingCache, IndexedChunk, StoredFile, chunk_id
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +61,28 @@ async def run_job(
     except Exception as exc:  # noqa: BLE001
         logger.exception("Unhandled error in an index job")
         yield IndexEvent(step="error", message=str(exc))
+
+
+def _unique(chunks: list[Chunk]) -> list[Chunk]:
+    """
+    One chunk per id, keeping the last of any that collide.
+
+    An id is `file_path:start_line`, so two chunks starting on the same line
+    describe a single storable row. Postgres refuses a statement that would
+    update one row twice, and Chroma would quietly keep whichever came last —
+    so the choice is made here instead, before the embedding bill and the
+    progress counts are calculated from it. The upload is written by the
+    client, which is why a malformed one must not be able to fail a whole job.
+    """
+    by_id = {chunk_id(chunk.file_path, chunk.start_line): chunk for chunk in chunks}
+    if len(by_id) == len(chunks):
+        return chunks
+    logger.warning(
+        "An upload carried %d chunks for only %d ids; keeping the last of each",
+        len(chunks),
+        len(by_id),
+    )
+    return list(by_id.values())
 
 
 def _stale_ids(
@@ -95,7 +117,7 @@ async def _job_steps(
     project = upload.project_id
     # A forced rebuild discards the store, so nothing in it is worth reconciling against.
     stored = {} if upload.reset else await store.manifest(project)
-    chunks = upload.chunks
+    chunks = _unique(upload.chunks)
 
     # ── C: embed everything before anything is written ───────────────────────
     vectors: dict[int, list[float]] = {}

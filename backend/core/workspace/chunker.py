@@ -106,7 +106,9 @@ def chunk_file(path: Path, root: Path) -> list[dict]:
     ext = path.suffix.lower()
     docs = _splitter(ext).create_documents([source])
 
-    result = []
+    # Keyed by start line: that is what identifies a chunk, so two chunks
+    # beginning on the same line cannot both survive. See the note below.
+    kept: dict[int, dict] = {}
     for doc in docs:
         content = doc.page_content
         if not content.strip():
@@ -115,11 +117,19 @@ def chunk_file(path: Path, root: Path) -> list[dict]:
         end_char = start_char + len(content)
         start_line = source[:start_char].count("\n") + 1
         end_line = source[:end_char].count("\n") + 1
-        result.append({
-            "file_path": rel,
-            "content": content,
-            "start_line": start_line,
-            "end_line": end_line,
-        })
+        # A chunk's id is `file_path:start_line` (core/index/ports.py), so two
+        # chunks that start on the same line claim one id. It happens wherever a
+        # single line is longer than _CHUNK_SIZE - _CHUNK_OVERLAP: the splitter
+        # cuts inside that line and both pieces map back to it. Keep whichever
+        # reaches furthest, since its lines cover the other's — the index loses
+        # no line, and no store is ever handed the same id twice.
+        previous = kept.get(start_line)
+        if previous is None or end_line >= previous["end_line"]:
+            kept[start_line] = {
+                "file_path": rel,
+                "content": content,
+                "start_line": start_line,
+                "end_line": end_line,
+            }
 
-    return result
+    return list(kept.values())
