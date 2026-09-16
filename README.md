@@ -18,7 +18,9 @@ The agent's tools always run on your machine, so edits land on your disk directl
 
 `core/providers.py` is the one place that picks implementations, from `INTERROAI_MODE`. The agents never import OpenAI, the vector store or the cloud clients, and `tests/test_boundaries.py` fails the build if they start to.
 
-The Azure architecture is drawn in [`docs/azure-architecture.svg`](docs/azure-architecture.svg), and the reasoning behind its main choices is recorded in [`docs/adr/`](docs/adr/README.md).
+![InterroAI on Azure: the Electron app and a local Python runtime on the user's machine, where the agent loop and its file tools run; in Azure, a Web API container app for GitHub PKCE sign-in, projects and sync, the LLM gateway and search, feeding index jobs through Service Bus to an Embed Worker that scales from zero, with PostgreSQL and pgvector holding vectors and line ranges but no code, and Blob Storage holding uploads](docs/azure-architecture.svg)
+
+The reasoning behind the diagram's main choices is recorded in [`docs/adr/`](docs/adr/README.md).
 
 - **Electron app** (`frontend/`) — React UI. Its main process starts the local runtime on a free `127.0.0.1` port with a random launch token, and runs the browser half of GitHub sign-in.
 - **Local runtime** (`backend/`: `api/`, `agents/`, `core/`) — FastAPI over the agent pipeline. `core/` is grouped by where each part runs: `workspace/` (your project on disk), `index/` (the indexing service), `models/` (OpenAI access), `local/` (cache and keychain) and `remote/` (the Cloud API clients). Payloads that cross service boundaries live in `contracts/`.
@@ -110,20 +112,18 @@ CI runs all of them, builds both images and checks that the API image starts. It
    - Deleted, renamed, emptied and shrunken files lose their stale vectors. A job changes the index in one step, and embeddings already paid for are cached, so a failure part-way through costs nothing on the retry. A chunk the provider refuses is skipped and *reported*, never hidden.
 2. **No source code in the index** — the index keeps vectors, paths, line ranges and file hashes. Search results are read back from your disk, and a hit from a file edited since indexing is labelled stale so the agent re-reads it before trusting a line number.
 3. **Intent classification** — each request is routed to `answer` or `implement`, grounded in your file tree and git state.
-4. **Manual model selection** — no auto-routing; an unknown model ID is rejected with the list of valid ones rather than silently substituted.
-5. **Coding Agent: Plan → Code → Verify**
+4. **Coding Agent: Plan → Code → Verify**
    - *Plan:* a Markdown plan of attack, streamed as it's generated.
    - *Code:* a sandboxed tool loop (`read_file`, `write_file`, `patch_file`, `search_grep`, `search_semantic`). Every path is resolved against the project root and anything escaping it is rejected.
    - *Verify:* `ruff` and `pytest` run against your project, with up to 3 autonomous self-correction rounds. A check that could not run reports as **skipped**, never as passed.
-6. **Secure credential storage** — your API key lives in the OS keychain via `keyring`, never in a config file, and is never echoed back to the UI. In cloud mode the runtime keeps the session's refresh token the same way, and the Electron app never sees a token.
-7. **Cloud protections** — row-level security keeps each user's projects, chunks and jobs apart in Postgres; refresh tokens rotate, and a replayed one ends every session of that user; the runtime answers only the app that started it; request size limits, per-minute rate limits and exact daily quotas guard the platform key.
-8. **Optional Redis cache** (local mode) — caches the AST repo map and chunk embeddings, keyed by content so a renamed file costs nothing to re-index. Strictly an accelerator: without a `redis-server` the app logs one line and carries on.
+5. **Secure credential storage** — your API key lives in the OS keychain via `keyring`, never in a config file, and is never echoed back to the UI. In cloud mode the runtime keeps the session's refresh token the same way, and the Electron app never sees a token.
+6. **Cloud protections** — row-level security keeps each user's projects, chunks and jobs apart in Postgres; refresh tokens rotate, and a replayed one ends every session of that user; the runtime answers only the app that started it; request size limits, per-minute rate limits and exact daily quotas guard the platform key.
+7. **Optional Redis cache** (local mode) — caches the AST repo map and chunk embeddings, keyed by content so a renamed file costs nothing to re-index. Strictly an accelerator: without a `redis-server` the app logs one line and carries on.
 
 ## Roadmap
 
 - **Deploy to Azure with Terraform:** Container Apps for the API and the worker (the worker scaled by queue length, down to zero), Postgres Flexible Server, Service Bus Basic, Blob Storage with a lifecycle rule for abandoned uploads, and secrets as Key Vault references.
 - **Security Guardrail Agent:** scan generated code for vulnerabilities before it is written to disk.
-- **Time-Travel Rollback:** automatic local snapshots to undo AI-generated modifications.
 
 ## State outside the repo
 
