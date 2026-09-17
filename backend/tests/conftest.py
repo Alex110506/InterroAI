@@ -183,9 +183,17 @@ def with_api_key():
     llm_module.use_api_key(None)
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def fake_keyring(monkeypatch):
-    """Replace the OS keychain with an in-memory dict — no test touches the real one."""
+    """
+    Replace the OS keychain with an in-memory dict — no test touches the real one.
+
+    Autouse, like `fake_redis`: every session check reads the refresh token, so a
+    test that reaches `GET /api/session` or a model call touches the keychain
+    without asking for it. Opt-in let such tests read the developer's real
+    Keychain on macOS, and fail on CI's Linux runners, which have no keychain at
+    all. Request it by name to inspect the store.
+    """
     store: dict[tuple[str, str], str] = {}
 
     class K:
