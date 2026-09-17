@@ -8,22 +8,22 @@ Every request is classified before anything runs: a question gets a read-only, g
 
 ## Architecture
 
-The agent's tools always run on your machine, so edits land on your disk directly. Model access and the semantic index sit behind two ports, and the local runtime runs in one of two modes:
+The agent's tools always run on your machine, so edits land on your disk directly. Everything that is *not* your files is a service, reached through two ports:
 
-| | `local` | `cloud` |
-| --- | --- | --- |
-| **Models** (`ModelGateway`) | OpenAI directly, with your key from the OS keychain | The Cloud API's LLM gateway: platform key, model allowlist, rate limits and daily quotas |
-| **Semantic index** (`SemanticIndex`) | ChromaDB on disk, with an in-process worker | Blob upload → Service Bus → Embed Worker → pgvector |
-| **Sign-in** | None | GitHub, in the system browser, with PKCE |
+| | Provided by the InterroAI Cloud API |
+| --- | --- |
+| **Models** (`ModelGateway`) | The LLM gateway: platform key, model allowlist, rate limits and daily quotas |
+| **Semantic index** (`SemanticIndex`) | Blob upload → Service Bus → Embed Worker → pgvector |
+| **Sign-in** | GitHub, in the system browser, with PKCE |
 
-`core/providers.py` is the one place that picks implementations, from `INTERROAI_MODE`. The agents never import OpenAI, the vector store or the cloud clients, and `tests/test_boundaries.py` fails the build if they start to.
+`core/providers.py` is the one place that names an implementation. The agents never import OpenAI, the vector store or the cloud clients, and `tests/test_boundaries.py` fails the build if they start to.
 
 ![InterroAI on Azure: the Electron app and a local Python runtime on the user's machine, where the agent loop and its file tools run; in Azure, a Web API container app for GitHub PKCE sign-in, projects and sync, the LLM gateway and search, feeding index jobs through Service Bus to an Embed Worker that scales from zero, with PostgreSQL and pgvector holding vectors and line ranges but no code, and Blob Storage holding uploads](docs/azure-architecture.svg)
 
 The reasoning behind the diagram's main choices is recorded in [`docs/adr/`](docs/adr/README.md).
 
 - **Electron app** (`frontend/`) — React UI. Its main process starts the local runtime on a free `127.0.0.1` port with a random launch token, and runs the browser half of GitHub sign-in.
-- **Local runtime** (`backend/`: `api/`, `agents/`, `core/`) — FastAPI over the agent pipeline. `core/` is grouped by where each part runs: `workspace/` (your project on disk), `index/` (the indexing service), `models/` (OpenAI access), `local/` (cache and keychain) and `remote/` (the Cloud API clients). Payloads that cross service boundaries live in `contracts/`.
+- **Local runtime** (`backend/`: `api/`, `agents/`, `core/`) — FastAPI over the agent pipeline. `core/` is grouped by where each part runs: `workspace/` (your project on disk), `index/` (the indexing service), `models/` (OpenAI access), `local/` (the repo-map cache and the keychain) and `remote/` (the Cloud API clients). Payloads that cross service boundaries live in `contracts/`.
 - **Cloud API** (`backend/cloud/api/`) — FastAPI for Azure Container Apps: GitHub sign-in, projects, sync, upload URLs, index jobs with live progress over server-sent events, search, and the LLM gateway.
 - **Embed Worker** (`backend/cloud/worker/`) — takes index jobs off Service Bus, embeds the chunks, and changes the index in one transaction.
 - **Data** — PostgreSQL with pgvector and row-level security per user; Blob Storage for uploads; Service Bus for jobs.
@@ -41,16 +41,33 @@ cd ../frontend
 npm install
 ```
 
-The backend's dependencies come in three sets, so the cloud images stay small: the base every process needs, `runtime` (ChromaDB, the chunker and Redis, for the desktop only) and `cloud` (SQLAlchemy, asyncpg, Alembic and the Azure SDKs). `requirements.lock` pins the base and `runtime`; `requirements-cloud.lock` pins the base and `cloud` for the images.
+The backend's dependencies come in three sets, so the cloud images stay small: the base every process needs, `runtime` (the chunker, `.gitignore` matching and Redis, for the desktop only) and `cloud` (SQLAlchemy, asyncpg, Alembic and the Azure SDKs). `requirements.lock` pins the base and `runtime`; `requirements-cloud.lock` pins the base and `cloud` for the images.
 
-## Run in local mode
+## Run the cloud side, on the local stack
+
+The app signs in to a Cloud API, so start one. Docker stands in for the Azure services: Postgres with pgvector, Azurite for Blob Storage, and the Service Bus emulator. The emulator needs SQL Server, which has no arm64 image, so on Apple Silicon turn on Docker Desktop's Rosetta setting.
+
+1. Copy `.env.example` to `.env` at the repo root and fill it in; its comments explain each value. You need a GitHub OAuth App with the callback URL `http://localhost:8080/auth/github/callback`, and your GitHub login in `INTERROAI_ALLOWED_GITHUB_LOGINS`.
+2. Start the stack and create the schema:
+   ```bash
+   docker compose up -d
+   cd backend
+   alembic -c cloud/alembic.ini upgrade head
+   ```
+3. From `backend/`, start the Cloud API and the Embed Worker, each in its own terminal:
+   ```bash
+   uvicorn cloud.api.main:create_app --factory --port 8080
+   python -m cloud.worker
+   ```
+
+## Run the app
 
 ```bash
 cd frontend
 npm run dev      # Vite on :5173 and the Electron window, which starts the runtime itself
 ```
 
-Open **Settings** to add your OpenAI API key (stored in the OS keychain), then **New project** to pick a folder. Pick the model for each request from the picker under the chat input.
+Choose **Sign in with GitHub**, then **New project** to pick a folder. Pick the model for each request from the picker under the chat input. `INTERROAI_API_URL` says which Cloud API the runtime uses.
 
 The app starts the runtime with `python3` from your `PATH`. If the backend's packages live in a virtualenv, point `INTERROAI_PYTHON` at its interpreter:
 
@@ -63,24 +80,6 @@ INTERROAI_PYTHON="$PWD/../backend/.venv/bin/python" npm run dev
 Each project's conversation lives in the app's memory, so follow-ups work — ask "what is this project about", then "sure", and the agent knows what it offered. Every request re-sends the conversation, and older turns are dropped once it exceeds a character budget, so a long session doesn't quietly inflate the cost of every request.
 
 Nothing is stored: there is no transcript on disk and nothing to resume after closing the app. The only state that outlives it is the index and your settings.
-
-## Run in cloud mode, on the local stack
-
-Docker stands in for the Azure services: Postgres with pgvector, Azurite for Blob Storage, and the Service Bus emulator. The emulator needs SQL Server, which has no arm64 image, so on Apple Silicon turn on Docker Desktop's Rosetta setting.
-
-1. Copy `.env.example` to `.env` at the repo root and fill it in; its comments explain each value. You need a GitHub OAuth App with the callback URL `http://localhost:8080/auth/github/callback`, your GitHub login in `INTERROAI_ALLOWED_GITHUB_LOGINS`, and `INTERROAI_MODE=cloud`.
-2. Start the stack and create the schema:
-   ```bash
-   docker compose up -d
-   cd backend
-   alembic -c cloud/alembic.ini upgrade head
-   ```
-3. From `backend/`, start the Cloud API and the Embed Worker, each in its own terminal:
-   ```bash
-   uvicorn cloud.api.main:create_app --factory --port 8080
-   python -m cloud.worker
-   ```
-4. Run `npm run dev` in `frontend/` and choose **Sign in with GitHub**.
 
 ### Container images
 
@@ -116,9 +115,9 @@ CI runs all of them, builds both images and checks that the API image starts. It
    - *Plan:* a Markdown plan of attack, streamed as it's generated.
    - *Code:* a sandboxed tool loop (`read_file`, `write_file`, `patch_file`, `search_grep`, `search_semantic`). Every path is resolved against the project root and anything escaping it is rejected.
    - *Verify:* `ruff` and `pytest` run against your project, with up to 3 autonomous self-correction rounds. A check that could not run reports as **skipped**, never as passed.
-5. **Secure credential storage** — your API key lives in the OS keychain via `keyring`, never in a config file, and is never echoed back to the UI. In cloud mode the runtime keeps the session's refresh token the same way, and the Electron app never sees a token.
+5. **No model key on your machine** — the platform holds it. The only credential stored here is your session's refresh token, kept in the OS keychain via `keyring` rather than a config file, never echoed back to the UI, and never seen by the Electron app.
 6. **Cloud protections** — row-level security keeps each user's projects, chunks and jobs apart in Postgres; refresh tokens rotate, and a replayed one ends every session of that user; the runtime answers only the app that started it; request size limits, per-minute rate limits and exact daily quotas guard the platform key.
-7. **Optional Redis cache** (local mode) — caches the AST repo map and chunk embeddings, keyed by content so a renamed file costs nothing to re-index. Strictly an accelerator: without a `redis-server` the app logs one line and carries on.
+7. **Optional Redis cache** — caches the AST repo map, keyed by a fingerprint of the sources it was built from, so the agent does not re-parse an unchanged project on every request. Strictly an accelerator: without a `redis-server` the app logs one line and carries on.
 
 ## Roadmap
 
@@ -130,8 +129,6 @@ CI runs all of them, builds both images and checks that the API image starts. It
 | Path | Holds |
 | --- | --- |
 | `~/.interroai/config.json` | Username and other non-sensitive config |
-| `~/.interroai/chroma/` | The local-mode index, one collection per project — vectors, paths, line ranges and file hashes, no source text |
-| `~/.interroai/cloud_projects.json` | Cloud mode: which server project each local folder is. The server is never told the path |
-| OS keychain (`interroai` / `openai_api_key`) | Your API key, for local mode |
-| OS keychain (`interroai` / `cloud_refresh_token:<api url>`) | Your cloud session's refresh token |
-| Redis, if running (`INTERROAI_REDIS_URL`) | Repo-map and embedding caches. Derived data — safe to flush |
+| `~/.interroai/cloud_projects.json` | Which server project each local folder is. The server is never told the path |
+| OS keychain (`interroai` / `cloud_refresh_token:<api url>`) | Your session's refresh token |
+| Redis, if running (`INTERROAI_REDIS_URL`) | The repo-map cache. Derived data — safe to flush |

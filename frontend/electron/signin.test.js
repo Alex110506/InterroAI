@@ -11,8 +11,8 @@ const { pkcePair, signIn } = require('./signin')
 const CLOUD = 'https://cloud.example'
 const TOKEN = 'launch-token'
 
-// The runtime's /api/session, answering as a cloud runtime would.
-async function fakeRuntime({ mode = 'cloud', acceptCode = 'login-code' } = {}) {
+// The runtime's /api/session.
+async function fakeRuntime({ acceptCode = 'login-code' } = {}) {
   const calls = []
   const server = http.createServer(async (req, res) => {
     let raw = ''
@@ -20,9 +20,9 @@ async function fakeRuntime({ mode = 'cloud', acceptCode = 'login-code' } = {}) {
     calls.push({ method: req.method, token: req.headers['x-interroai-token'], body: raw ? JSON.parse(raw) : null })
     res.setHeader('Content-Type', 'application/json')
     if (req.method === 'GET') {
-      res.end(JSON.stringify({ mode, api_url: mode === 'cloud' ? `${CLOUD}/` : null, signed_in: false }))
+      res.end(JSON.stringify({ api_url: `${CLOUD}/`, signed_in: false }))
     } else if (JSON.parse(raw).code === acceptCode) {
-      res.end(JSON.stringify({ mode: 'cloud', api_url: CLOUD, signed_in: true, login: 'octocat', avatar_url: null }))
+      res.end(JSON.stringify({ api_url: CLOUD, signed_in: true, login: 'octocat', avatar_url: null }))
     } else {
       res.statusCode = 400
       res.end(JSON.stringify({ detail: { code: 'invalid_grant', message: 'The sign-in code is invalid or has expired.' } }))
@@ -118,17 +118,6 @@ test('the runtime refusing the code fails the sign-in, and the browser is told',
   try {
     await assert.rejects(signIn({ runtime, openExternal: browser.openExternal }), { code: 'invalid_grant' })
     assert.equal((await browser.pages[0]).status, 400)
-  } finally {
-    close()
-  }
-})
-
-test('a runtime in local mode does not start a sign-in', async () => {
-  const { close, runtime } = await fakeRuntime({ mode: 'local' })
-  const browser = scriptedBrowser({ code: 'login-code' })
-  try {
-    await assert.rejects(signIn({ runtime, openExternal: browser.openExternal }), { code: 'local_mode' })
-    assert.equal(browser.opened.length, 0)
   } finally {
     close()
   }

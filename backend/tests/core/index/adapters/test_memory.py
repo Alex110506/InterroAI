@@ -1,21 +1,47 @@
-"""The in-memory stand-ins for Blob Storage, Service Bus and the embedding cache."""
+"""The in-memory stand-ins for pgvector, Blob Storage, Service Bus and the embedding cache."""
 from __future__ import annotations
 
 import asyncio
+from uuid import uuid4
 
 import pytest
+from port_contracts.chunk_store import ChunkStoreContract
 from port_contracts.embedding_cache import EmbeddingCacheContract
 from port_contracts.job_queue import JobQueueContract
 from port_contracts.upload_store import UploadStoreContract
 
 from contracts.indexing import IndexJobMessage
 from core.index.adapters.memory import (
+    InMemoryChunkStore,
     InMemoryEmbeddingCache,
     InMemoryJobQueue,
     InMemoryUploadStore,
 )
 
 # ── The contracts ────────────────────────────────────────────────────────────
+
+
+class TestInMemoryChunkStore(ChunkStoreContract):
+    """
+    The same suite pgvector answers. This is what lets the indexer's own tests
+    run offline, without a database and without the store on disk that the
+    local build used to provide.
+    """
+
+    @pytest.fixture
+    def store(self):
+        return InMemoryChunkStore()
+
+    @pytest.fixture
+    def new_project(self):
+        async def make() -> str:
+            return uuid4().hex
+
+        return make
+
+    @pytest.fixture
+    def dimensions(self):
+        return 8
 
 
 class TestInMemoryUploadStore(UploadStoreContract):

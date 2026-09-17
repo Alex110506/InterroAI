@@ -396,12 +396,12 @@ async def test_a_missing_project_directory_is_an_error_event(tmp_path):
     assert "not found" in events[0]["message"]
 
 
-async def test_a_missing_api_key_is_surfaced_verbatim(tmp_project, without_api_key):
-    """The user must be told to add a key, not shown a generic failure."""
+async def test_being_signed_out_is_surfaced_verbatim(tmp_project):
+    """The user must be told to sign in, not shown a generic failure."""
     a = CoderAgent(str(tmp_project), "gpt-5.6-sol")
     events = await drain(a.execute("do something"))
     assert events[0]["type"] == "error"
-    assert "API key" in events[0]["message"]
+    assert "Sign in" in events[0]["message"]
 
 
 async def test_the_answer_intent_never_exposes_write_tools(tmp_project, monkeypatch):

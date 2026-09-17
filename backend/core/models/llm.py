@@ -44,7 +44,6 @@ from tenacity import (
 )
 
 from core.errors import MissingAPIKeyError
-from core.local.security import retrieve_openai_key
 
 logger = logging.getLogger(__name__)
 
@@ -126,18 +125,18 @@ chat_retry = _retrying(retry_if_exception(_worth_retrying_a_chat))
 # still produces a fresh client.
 _clients: dict[tuple[str, float | None, float | None], AsyncOpenAI] = {}
 
-#: A key set by the process itself. The desktop runtime leaves this unset and
-#: reads the user's OS keychain; the cloud API and worker have no keychain and
-#: set the platform key from their settings.
+#: The platform's key, set by the process that holds it: the cloud API and the
+#: worker, from their settings. Nothing else reaches OpenAI — the desktop
+#: runtime goes through the API's LLM gateway and never calls it directly.
 _configured_key: str | None = None
 
 
 def use_api_key(key: str | None) -> None:
     """
-    Use *key* for every client from now on, instead of the OS keychain.
+    Use *key* for every client from now on.
 
     For the cloud processes, whose key comes from settings — in Azure, from Key
-    Vault through an environment variable. `None` goes back to the keychain.
+    Vault through an environment variable. `None` clears it, leaving no key.
     """
     global _configured_key
     _configured_key = key or None
@@ -146,15 +145,15 @@ def use_api_key(key: str | None) -> None:
 
 def get_client(timeout: httpx.Timeout) -> AsyncOpenAI:
     """
-    Return a configured client for the configured key, or else the stored one.
+    Return a client for the configured key.
 
     Raises:
-        MissingAPIKeyError: if no key is configured or present in the OS
-            keychain. This is an expected condition, not a bug — callers should
-            surface it to the user verbatim rather than treating it as a
-            generic failure.
+        MissingAPIKeyError: if no key has been configured, which means the
+            process holding the platform key started without one. This is an
+            expected condition, not a bug — callers should surface it verbatim
+            rather than treating it as a generic failure.
     """
-    key = _configured_key or retrieve_openai_key()
+    key = _configured_key
     if not key:
         raise MissingAPIKeyError()
 

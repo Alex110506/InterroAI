@@ -1,12 +1,10 @@
 import { useState, useEffect, useRef } from 'react'
-import { X, User, Key, Eye, EyeOff, Save, AlertCircle, CheckCircle2, LogOut } from 'lucide-react'
+import { X, User, Save, AlertCircle, CheckCircle2, LogOut } from 'lucide-react'
 import { api } from '../lib/api'
 import s from './SettingsModal.module.css'
 
 export default function SettingsModal({ settings, session, onSave, onClose, onSignOut }) {
   const [name, setName] = useState(settings.name ?? '')
-  const [apiKey, setApiKey] = useState('')
-  const [showKey, setShowKey] = useState(false)
   const [status, setStatus] = useState(null) // null | 'saving' | 'success' | 'error'
   const [errorMsg, setErrorMsg] = useState('')
   const nameRef = useRef(null)
@@ -24,14 +22,9 @@ export default function SettingsModal({ settings, session, onSave, onClose, onSi
     setStatus('saving')
     setErrorMsg('')
     try {
-      await api.saveSettings({ name: name.trim(), apiKey: apiKey.trim() })
+      await api.saveSettings({ name: name.trim() })
       setStatus('success')
-      setTimeout(() => {
-        onSave({
-          name: name.trim(),
-          hasApiKey: settings.hasApiKey || !!apiKey.trim(),
-        })
-      }, 600)
+      setTimeout(() => onSave({ name: name.trim() }), 600)
     } catch (err) {
       setStatus('error')
       setErrorMsg(err.message || 'Could not reach the InterroAI runtime.')
@@ -39,8 +32,6 @@ export default function SettingsModal({ settings, session, onSave, onClose, onSi
   }
 
   const isSaving = status === 'saving'
-  // In cloud mode the platform holds the model key, so there is none to enter here.
-  const cloud = session?.mode === 'cloud'
 
   return (
     <div
@@ -84,66 +75,25 @@ export default function SettingsModal({ settings, session, onSave, onClose, onSi
             />
           </div>
 
-          {cloud ? (
-            <div className={s.field}>
-              <span className={s.label}>
-                <User size={13} strokeWidth={1.8} />
-                InterroAI account
-              </span>
-              <div className={s.accountRow}>
-                <span className={s.accountName}>
-                  {session.login ? `Signed in as @${session.login}` : 'Signed in'}
-                </span>
-                <button className={s.signOutBtn} onClick={onSignOut} type="button">
-                  <LogOut size={13} strokeWidth={1.8} />
-                  Sign out
-                </button>
-              </div>
-              <p className={s.hint}>
-                The agent uses InterroAI's model access, within a daily allowance. No OpenAI key is needed.
-              </p>
-            </div>
-          ) : (
-          /* API key */
+          {/* Account. The platform holds the model key, so there is none to enter here. */}
           <div className={s.field}>
-            <label className={s.label} htmlFor="s-key">
-              <Key size={13} strokeWidth={1.8} />
-              OpenAI API key
-              {settings.hasApiKey && (
-                <span className={s.savedBadge}>
-                  <CheckCircle2 size={11} strokeWidth={2} />
-                  Saved in keychain
-                </span>
-              )}
-            </label>
-            <div className={s.inputRow}>
-              <input
-                id="s-key"
-                type={showKey ? 'text' : 'password'}
-                className={`${s.input} ${s.mono}`}
-                placeholder={settings.hasApiKey ? 'Enter a new key to update…' : 'sk-…'}
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') handleSave() }}
-                autoComplete="off"
-                spellCheck={false}
-              />
-              <button
-                className={s.eyeBtn}
-                onClick={() => setShowKey((v) => !v)}
-                type="button"
-                title={showKey ? 'Hide' : 'Show'}
-              >
-                {showKey
-                  ? <EyeOff size={14} strokeWidth={1.8} />
-                  : <Eye size={14} strokeWidth={1.8} />}
+            <span className={s.label}>
+              <User size={13} strokeWidth={1.8} />
+              InterroAI account
+            </span>
+            <div className={s.accountRow}>
+              <span className={s.accountName}>
+                {session?.login ? `Signed in as @${session.login}` : 'Signed in'}
+              </span>
+              <button className={s.signOutBtn} onClick={onSignOut} type="button">
+                <LogOut size={13} strokeWidth={1.8} />
+                Sign out
               </button>
             </div>
             <p className={s.hint}>
-              Stored in the macOS Keychain via <code>keyring</code>. Never sent anywhere except the OpenAI API.
+              The agent uses InterroAI's model access, within a daily allowance. No OpenAI key is needed.
             </p>
           </div>
-          )}
         </div>
 
         {/* Footer */}

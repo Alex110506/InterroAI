@@ -1,18 +1,99 @@
 """
-In-process implementations of `UploadStore`, `JobQueue` and `EmbeddingCache`.
+In-process implementations of `ChunkStore`, `UploadStore`, `JobQueue` and
+`EmbeddingCache`.
 
-The local build's stand-ins for Blob Storage, Service Bus and the Postgres
-embedding cache, and the test doubles for anything that needs one. They honour
-the same contracts as the cloud adapters — `tests/port_contracts/` runs one
-suite against both — including the parts that only matter when something goes
-wrong: settlement, redelivery and dead-lettering.
+Stand-ins for pgvector, Blob Storage, Service Bus and the Postgres embedding
+cache, so the indexing pipeline can be exercised without any of them. They
+honour the same contracts as the cloud adapters — `tests/port_contracts/` runs
+one suite against both — including the parts that only matter when something
+goes wrong: settlement, redelivery and dead-lettering.
 """
 from __future__ import annotations
 
 import asyncio
+import math
 
-from contracts.indexing import ChunkUpload, IndexJobMessage
-from core.index.ports import UploadNotFoundError
+from contracts.indexing import ChunkUpload, IndexJobMessage, SearchHit
+from core.index.ports import IndexedChunk, StoredFile, UploadNotFoundError, chunk_id
+
+
+def _cosine_similarity(one: list[float], other: list[float]) -> float:
+    """1.0 for identical directions, 0.0 for orthogonal — what pgvector's distance inverts to."""
+    dot = sum(a * b for a, b in zip(one, other, strict=True))
+    size = math.sqrt(sum(a * a for a in one)) * math.sqrt(sum(b * b for b in other))
+    return dot / size if size else 0.0
+
+
+class InMemoryChunkStore:
+    """
+    Stands in for Postgres with pgvector: chunks in a dict, searched by cosine
+    similarity.
+
+    Atomic for free — a dict mutation cannot be interrupted — so it satisfies
+    the port's "a search sees the index from before the job or after it" without
+    the transaction the real store needs.
+    """
+
+    def __init__(self) -> None:
+        #: project id → chunk id → the chunk.
+        self._projects: dict[str, dict[str, IndexedChunk]] = {}
+
+    def __len__(self) -> int:
+        return sum(len(chunks) for chunks in self._projects.values())
+
+    async def manifest(self, project_id: str) -> dict[str, StoredFile]:
+        by_file: dict[str, list[IndexedChunk]] = {}
+        for chunk in self._projects.get(project_id, {}).values():
+            by_file.setdefault(chunk.file_path, []).append(chunk)
+
+        manifest = {}
+        for path, chunks in by_file.items():
+            chunks.sort(key=lambda chunk: chunk.start_line)
+            manifest[path] = StoredFile(
+                # A file's chunks are written by one job and share its hash.
+                file_hash=chunks[0].file_hash,
+                ids=tuple(chunk_id(chunk.file_path, chunk.start_line) for chunk in chunks),
+            )
+        return manifest
+
+    async def apply(
+        self,
+        project_id: str,
+        *,
+        upserts: list[IndexedChunk],
+        delete: list[str],
+        reset: bool = False,
+    ) -> int:
+        chunks = self._projects.setdefault(project_id, {})
+        if reset:
+            chunks.clear()
+
+        # Deletes run before upserts, as they do in the Postgres transaction, so
+        # an id in both lists ends up written rather than dropped.
+        removed = sum(1 for key in delete if chunks.pop(key, None) is not None)
+        for chunk in upserts:
+            chunks[chunk.id] = chunk
+        return removed
+
+    async def search(self, project_id: str, vector: list[float], n: int) -> list[SearchHit]:
+        scored = sorted(
+            (
+                (_cosine_similarity(vector, chunk.vector), chunk)
+                for chunk in self._projects.get(project_id, {}).values()
+            ),
+            key=lambda pair: pair[0],
+            reverse=True,
+        )
+        return [
+            SearchHit(
+                file_path=chunk.file_path,
+                start_line=chunk.start_line,
+                end_line=chunk.end_line,
+                file_hash=chunk.file_hash,
+                score=score,
+            )
+            for score, chunk in scored[:n]
+        ]
 
 
 class InMemoryUploadStore:

@@ -27,11 +27,11 @@ class InterroAIError(Exception):
 
 
 class MissingAPIKeyError(InterroAIError):
-    """No OpenAI API key is stored in the OS keychain."""
+    """The process holding the platform's model key started without one."""
 
     def __init__(
         self,
-        message: str = "No OpenAI API key configured — add yours in Settings.",
+        message: str = "No model API key is configured for the InterroAI cloud.",
     ) -> None:
         super().__init__(message)
 

@@ -13,7 +13,6 @@ from openai import APIConnectionError, BadRequestError
 import core.index.embeddings as embeddings
 from core.errors import MissingAPIKeyError
 from core.index.adapters.memory import InMemoryEmbeddingCache
-from core.index.adapters.redis_cache import RedisEmbeddingCache
 from core.index.embeddings import _BATCH_SIZE, _MODEL, EmbeddedBatch, embed_batches, embed_texts
 
 
@@ -160,7 +159,7 @@ async def test_nothing_is_yielded_for_no_input(recording):
 
 async def test_a_cached_vector_is_not_embedded_again(recording):
     """Content addressed, so re-indexing an unchanged chunk costs nothing."""
-    cache = RedisEmbeddingCache()
+    cache = InMemoryEmbeddingCache()
     await embed_texts(["stable chunk"], cache=cache)
     assert len(recording.batches) == 1
 
@@ -175,7 +174,7 @@ async def test_without_a_cache_nothing_is_remembered(recording):
 
 
 async def test_a_cache_hit_is_reported_as_such(recording):
-    cache = RedisEmbeddingCache()
+    cache = InMemoryEmbeddingCache()
     await embed_texts(["x"], cache=cache)
     batches = await _collect(["x"], cache=cache)
     assert batches[0].from_cache == 1
@@ -183,7 +182,7 @@ async def test_a_cache_hit_is_reported_as_such(recording):
 
 async def test_a_renamed_file_reuses_its_vectors(recording):
     """The point of hashing content rather than paths: moving code is free."""
-    cache = RedisEmbeddingCache()
+    cache = InMemoryEmbeddingCache()
     await embed_texts(["def login(): ...", "def logout(): ..."], cache=cache)
     calls = len(recording.batches)
 
@@ -195,12 +194,6 @@ async def test_a_renamed_file_reuses_its_vectors(recording):
 async def test_duplicate_text_in_one_batch_is_embedded_once(recording):
     await embed_texts(["same", "same", "different"])
     assert sorted(recording.batches[0]) == ["different", "same"]
-
-
-async def test_a_broken_redis_does_not_stop_embedding(recording, fake_redis):
-    """Redis is an accelerator; losing it costs speed, never correctness."""
-    fake_redis.broken = True
-    assert len(await embed_texts(["a", "b"], cache=RedisEmbeddingCache())) == 2
 
 
 async def test_a_cache_that_raises_is_treated_as_a_miss(recording, caplog):

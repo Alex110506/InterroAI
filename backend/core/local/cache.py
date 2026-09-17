@@ -1,21 +1,18 @@
 """
 Redis cache for derived data — an accelerator, never a dependency.
 
-Two things live here, and both are *recomputable*:
+One thing lives here, and it is *recomputable*: the **AST repo map**, keyed by
+a fingerprint of the files it was built from. `build_repo_map` parses every
+source file in the project, and the Coder Agent needs it on every single
+request; between two requests the repo has almost always not changed at all.
 
-  * **The AST repo map**, keyed by a fingerprint of the files it was built
-    from. `build_repo_map` parses every source file in the project, and the
-    Coder Agent needs it on every single request; between two requests the
-    repo has almost always not changed at all.
-  * **Chunk embeddings**, keyed by a hash of the chunk text itself. Content
-    addressing is what makes a renamed or moved file free to re-index: the
-    bytes are identical, so the vector is already here.
-
-Losing either costs time, never correctness. That is precisely what makes them
-safe to keep in evictable storage, and it is why the file→hash manifest that
-drives incremental indexing deliberately does **not** live here — that has to
-stay consistent with the vectors it describes, so it lives in the vector
-store's own metadata (see `core/index/adapters/chroma.py::stored_manifest`).
+Losing it costs time, never correctness. That is precisely what makes it safe
+to keep in evictable storage, and it is why the file→hash manifest that drives
+incremental indexing deliberately does **not** live here — that has to stay
+consistent with the vectors it describes, so it lives with them, in the index's
+own store. Chunk embeddings are the cloud's business for the same reason the
+vectors are: the worker caches those in Postgres, next to the platform key, so
+nothing on this machine holds a vector.
 
 If no Redis is reachable, every read misses and every write is dropped, so the
 caller simply recomputes. A desktop app must not stop working because a
@@ -28,7 +25,6 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
-from array import array
 
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
@@ -65,8 +61,8 @@ def _redis() -> Redis | None:
         # can fail yet, so unavailability is discovered at the first use.
         _client = Redis.from_url(
             os.environ.get(_URL_ENV, _DEFAULT_URL),
-            # Vectors are packed binary — decoding responses as UTF-8 would
-            # corrupt them. Text values are decoded explicitly instead.
+            # Decoded explicitly at each call site instead, so a future
+            # binary value cannot be silently mangled by a UTF-8 round trip.
             decode_responses=False,
             socket_connect_timeout=_CONNECT_TIMEOUT,
             socket_timeout=_CONNECT_TIMEOUT,
@@ -139,70 +135,3 @@ async def set_repo_map(project_path: str, fingerprint: str, repo_map: str) -> No
         _give_up(exc)
 
 
-# ── Embedding vectors ────────────────────────────────────────────────────────
-
-
-def vector_key_for(model: str, digest: str) -> str:
-    """
-    The key for one embedding, given its text's digest.
-
-    The model is part of the key: two models produce incompatible vectors for
-    identical text, and silently mixing them would corrupt every search.
-    """
-    return f"{_PREFIX}:vec:{model}:{digest}"
-
-
-def vector_key(text: str, model: str) -> str:
-    """Content-addressed key for one chunk's embedding."""
-    return vector_key_for(model, _digest(text))
-
-
-def _encode(vector: list[float]) -> bytes:
-    return array("f", vector).tobytes()
-
-
-def _decode(raw: bytes) -> list[float]:
-    values = array("f")
-    values.frombytes(raw)
-    return values.tolist()
-
-
-async def get_vectors(keys: list[str]) -> dict[str, list[float]]:
-    """Fetch what is cached for *keys*. Missing or unreadable keys are absent."""
-    client = _redis()
-    if client is None or not keys:
-        return {}
-    try:
-        raw_values = await client.mget(keys)
-    except (RedisError, OSError) as exc:
-        _give_up(exc)
-        return {}
-
-    found: dict[str, list[float]] = {}
-    # MGET answers one value per key, in order.
-    for key, raw in zip(keys, raw_values, strict=True):
-        if raw is None:
-            continue
-        try:
-            found[key] = _decode(raw)
-        except (ValueError, TypeError):
-            # A truncated or foreign value is a miss, not a crash: the caller
-            # recomputes and overwrites it.
-            logger.debug("Discarding an undecodable cached vector for %s.", key)
-    return found
-
-
-async def set_vectors(vectors: dict[str, list[float]]) -> None:
-    """Store *vectors* by key, each with its own TTL."""
-    client = _redis()
-    if client is None or not vectors:
-        return
-    try:
-        # A pipeline so one round trip covers the whole batch; MSET cannot
-        # carry a per-key TTL.
-        pipe = client.pipeline(transaction=False)
-        for key, vector in vectors.items():
-            pipe.set(key, _encode(vector), ex=_TTL_SECONDS)
-        await pipe.execute()
-    except (RedisError, OSError) as exc:
-        _give_up(exc)

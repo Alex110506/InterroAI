@@ -68,7 +68,9 @@ test(
     // A throwaway home, so the runtime writes nothing into the developer's ~/.interroai.
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'interroai-runtime-test-'))
     const runtime = await startRuntime({
-      env: { ...process.env, HOME: home, INTERROAI_MODE: 'local' },
+      // A Cloud API that cannot answer: this test is about the launch token,
+      // and nothing in it should reach the network.
+      env: { ...process.env, HOME: home, INTERROAI_API_URL: 'http://127.0.0.1:9' },
       allowedOrigins: 'http://localhost:5173',
       output: quiet,
     })
@@ -80,7 +82,7 @@ test(
         headers: { 'X-Interroai-Token': runtime.token },
       })
       assert.equal(answered.status, 200)
-      assert.equal((await answered.json()).mode, 'local')
+      assert.equal((await answered.json()).api_url, 'http://127.0.0.1:9')
     } finally {
       runtime.stop()
       fs.rmSync(home, { recursive: true, force: true })

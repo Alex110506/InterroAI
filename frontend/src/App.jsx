@@ -9,7 +9,7 @@ import { api } from './lib/api'
 
 function toSession(data) {
   return {
-    mode: data.mode,
+    apiUrl: data.api_url,
     signedIn: data.signed_in,
     login: data.login,
     avatarUrl: data.avatar_url,
@@ -22,8 +22,8 @@ export default function App() {
   const [thoughtOpen, setThoughtOpen] = useState(true)
   const [thoughtEvents, setThoughtEvents] = useState([])
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [settings, setSettings] = useState({ name: '', hasApiKey: false })
-  // null until the runtime has said which mode it is in.
+  const [settings, setSettings] = useState({ name: '' })
+  // null until the runtime has said who is signed in.
   const [session, setSession] = useState(null)
 
   const onThoughtEvent = useCallback((event) => {
@@ -37,7 +37,7 @@ export default function App() {
       .then((data) => setSession(toSession(data)))
       .catch(() => {})
     api.getSettings()
-      .then((data) => setSettings({ name: data.name, hasApiKey: data.has_api_key }))
+      .then((data) => setSettings({ name: data.name }))
       .catch(() => {})
   }, [])
 
@@ -46,7 +46,7 @@ export default function App() {
   const handleAuthLost = useCallback(() => {
     setSettingsOpen(false)
     setSession((prev) =>
-      prev?.mode === 'cloud' ? { ...prev, signedIn: false, login: null, avatarUrl: null } : prev
+      prev ? { ...prev, signedIn: false, login: null, avatarUrl: null } : prev
     )
   }, [])
 
@@ -152,7 +152,7 @@ export default function App() {
     setSettingsOpen(false)
   }
 
-  if (session?.mode === 'cloud' && !session.signedIn) {
+  if (session && !session.signedIn) {
     return <LoginScreen onSignedIn={(data) => setSession(toSession(data))} />
   }
 
@@ -164,7 +164,7 @@ export default function App() {
       <Sidebar
         projects={projects}
         activeId={activeId}
-        account={session?.mode === 'cloud' ? session : null}
+        account={session}
         onSelect={setActiveId}
         onNewProject={handleNewProject}
         onDeleteProject={handleDeleteProject}

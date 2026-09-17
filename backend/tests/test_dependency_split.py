@@ -2,9 +2,9 @@
 The cloud processes run without the desktop runtime's dependencies.
 
 The images install `.[cloud]` only (backend/Dockerfile). If cloud code started
-importing the local index, the chunker or the Redis cache, the image would fail
-at startup in Azure. Here it fails first: the cloud entry points are imported in
-a fresh interpreter in which those packages cannot be found.
+importing the chunker or the optional Redis cache, the image would fail at
+startup in Azure. Here it fails first: the cloud entry points are imported in a
+fresh interpreter in which those packages cannot be found.
 """
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 BACKEND = Path(__file__).resolve().parents[1]
-RUNTIME_ONLY = ("chromadb", "langchain_text_splitters", "pathspec", "redis")
+RUNTIME_ONLY = ("langchain_text_splitters", "pathspec", "redis")
 
 
 def _import_without_runtime_packages(statement: str) -> subprocess.CompletedProcess:
@@ -56,7 +56,7 @@ def test_a_cloud_entry_point_needs_nothing_from_the_runtime_extra(statement):
 
 def test_the_guard_really_hides_the_runtime_packages():
     """Without this, a blocker that blocked nothing would pass the test above vacuously."""
-    result = _import_without_runtime_packages("import core.index.adapters.chroma")
+    result = _import_without_runtime_packages("import core.workspace.chunker")
 
     assert result.returncode != 0
     assert "not in the cloud image" in result.stderr

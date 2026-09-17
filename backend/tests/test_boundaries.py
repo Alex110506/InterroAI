@@ -60,13 +60,11 @@ def _violations(relative: str, forbidden: tuple[str, ...]) -> list[str]:
 #: implementations, local and remote, which only `core/providers.py` may name.
 _BEHIND_THE_PORTS = (
     "openai",
-    "chromadb",
     "core.models.llm",
     "core.models.gateway.OpenAIGateway",
     "core.index.adapters",
     "core.index.embeddings",
     "core.index.indexer",
-    "core.index.semantic_index.LocalSemanticIndex",
     "core.remote",
 )
 
@@ -101,7 +99,6 @@ def test_the_cloud_clients_stay_clients(module):
         "core.workspace",
         "agents",
         "api",
-        "chromadb",
         "core.models.llm",
         "core.index.adapters",
         "core.index.embeddings",

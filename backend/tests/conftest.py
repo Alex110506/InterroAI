@@ -19,10 +19,11 @@ _FAKE_HOME = tempfile.mkdtemp(prefix="interroai-test-home-")
 os.environ["HOME"] = _FAKE_HOME
 os.environ["USERPROFILE"] = _FAKE_HOME  # Windows equivalent
 
-# The suite always exercises the local build. An environment variable beats a
-# `.env` file in pydantic-settings, so a developer's `.env` saying
-# INTERROAI_MODE=cloud cannot quietly route tests through the network.
-os.environ["INTERROAI_MODE"] = "local"
+# An environment variable beats a `.env` file in pydantic-settings, so a
+# developer's own `.env` cannot point the suite at a Cloud API that exists.
+# Nothing here should reach one — every test hands in a fake at the port — and
+# an unreachable host makes a stray attempt fail loudly rather than quietly.
+os.environ["INTERROAI_API_URL"] = "https://api.example"
 
 # ── Application imports (must come after the HOME redirect) ──────────────────
 from pathlib import Path  # noqa: E402
@@ -31,7 +32,6 @@ from types import SimpleNamespace  # noqa: E402
 import pytest  # noqa: E402
 from redis.exceptions import RedisError  # noqa: E402
 
-import core.index.adapters.chroma as vector_store  # noqa: E402
 import core.local.cache as cache_module  # noqa: E402
 import core.local.security as security  # noqa: E402
 import core.models.llm as llm_module  # noqa: E402
@@ -143,19 +143,24 @@ def fake_client():
     return FakeOpenAIClient
 
 
-# ── API-key control ──────────────────────────────────────────────────────────
+# ── The cloud session and the platform key ───────────────────────────────────
 
 
 @pytest.fixture
-def cloud_mode(monkeypatch):
-    """This process as a cloud client of https://api.example, for one test."""
+def cloud_api(monkeypatch):
+    """
+    A known Cloud API URL, with the cached settings and session cleared around
+    the test.
+
+    Both are read once per process, so a test that changes the URL has to clear
+    them or the next test inherits a session pointing somewhere else.
+    """
     from core import providers
     from core.settings import get_runtime_settings
 
     # Held directly: a test may monkeypatch `providers.cloud_session` itself,
     # and that patch is still in place when this fixture tears down.
     session_factory = providers.cloud_session
-    monkeypatch.setenv("INTERROAI_MODE", "cloud")
     monkeypatch.setenv("INTERROAI_API_URL", "https://api.example")
     get_runtime_settings.cache_clear()
     session_factory.cache_clear()
@@ -171,17 +176,24 @@ def no_configured_platform_key(monkeypatch):
 
 
 @pytest.fixture
-def with_api_key(monkeypatch):
-    """Make `core.models.llm.get_client` believe a key is stored."""
-    monkeypatch.setattr(llm_module, "retrieve_openai_key", lambda: "sk-test-key")
-    llm_module._clients.clear()
+def with_api_key():
+    """The platform key configured, as a cloud process does at startup."""
+    llm_module.use_api_key("sk-test-key")
     yield "sk-test-key"
-    llm_module._clients.clear()
+    llm_module.use_api_key(None)
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def fake_keyring(monkeypatch):
-    """Replace the OS keychain with an in-memory dict — no test touches the real one."""
+    """
+    Replace the OS keychain with an in-memory dict — no test touches the real one.
+
+    Autouse, like `fake_redis`: every session check reads the refresh token, so a
+    test that reaches `GET /api/session` or a model call touches the keychain
+    without asking for it. Opt-in let such tests read the developer's real
+    Keychain on macOS, and fail on CI's Linux runners, which have no keychain at
+    all. Request it by name to inspect the store.
+    """
     store: dict[tuple[str, str], str] = {}
 
     class K:
@@ -202,23 +214,13 @@ def fake_keyring(monkeypatch):
 
 
 @pytest.fixture
-def without_api_key(monkeypatch):
-    """Make `core.models.llm.get_client` believe no key is stored."""
-    monkeypatch.setattr(llm_module, "retrieve_openai_key", lambda: None)
-    llm_module._clients.clear()
+def without_api_key():
+    """No platform key — what a cloud process started without one sees."""
+    llm_module.use_api_key(None)
     yield
-    llm_module._clients.clear()
 
 
 # ── Isolated persistence ─────────────────────────────────────────────────────
-
-
-@pytest.fixture
-def isolated_chroma(tmp_path, monkeypatch):
-    """Point the vector store at a throwaway Chroma directory."""
-    store = tmp_path / "chroma"
-    monkeypatch.setattr(vector_store, "_STORE_DIR", store)
-    return store
 
 
 class FakePipeline:

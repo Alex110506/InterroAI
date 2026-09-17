@@ -1,9 +1,11 @@
 """
 Timeout and retry policy — the reliability boundary around every OpenAI call.
 
-Retry tests use `retry_with(wait=wait_none())` so the real exponential backoff
-is exercised for *shape* (attempt counts, which exceptions requalify) without
-making the suite sleep.
+Only the cloud API and the worker reach OpenAI, each with the platform key from
+its settings; `use_api_key` is how that key arrives. Retry tests use
+`retry_with(wait=wait_none())` so the real exponential backoff is exercised for
+*shape* (attempt counts, which exceptions requalify) without making the suite
+sleep.
 """
 from __future__ import annotations
 
@@ -37,26 +39,25 @@ def _instant(fn):
 # ── Client construction ──────────────────────────────────────────────────────
 
 
-def test_missing_key_raises_a_typed_error(without_api_key):
+def test_no_configured_key_raises_a_typed_error():
+    """A cloud process started without the platform key — expected, not a defect."""
+    llm.use_api_key(None)
     with pytest.raises(MissingAPIKeyError):
         llm.get_client(llm.FAST_TIMEOUT)
 
 
-def test_empty_key_is_treated_as_missing(monkeypatch):
-    monkeypatch.setattr(llm, "retrieve_openai_key", lambda: "")
-    llm._clients.clear()
+def test_an_empty_key_is_treated_as_missing():
+    llm.use_api_key("")
     with pytest.raises(MissingAPIKeyError):
         llm.get_client(llm.FAST_TIMEOUT)
 
 
-def test_a_configured_key_wins_over_the_keychain(monkeypatch):
-    """The cloud processes have no keychain; they run on the platform key."""
-    monkeypatch.setattr(llm, "retrieve_openai_key", lambda: "sk-from-keychain")
+def test_the_configured_key_is_the_one_used():
     llm.use_api_key("sk-platform")
     assert llm.get_client(llm.FAST_TIMEOUT).api_key == "sk-platform"
 
 
-def test_clearing_the_configured_key_goes_back_to_the_keychain(without_api_key):
+def test_clearing_the_key_leaves_none():
     llm.use_api_key("sk-platform")
     llm.use_api_key(None)
     with pytest.raises(MissingAPIKeyError):
@@ -82,11 +83,10 @@ def test_clients_are_cached_per_timeout(with_api_key):
     assert llm.get_client(llm.LONG_TIMEOUT) is not first
 
 
-def test_rotating_the_key_yields_a_fresh_client(monkeypatch):
-    monkeypatch.setattr(llm, "retrieve_openai_key", lambda: "sk-old")
-    llm._clients.clear()
+def test_rotating_the_key_yields_a_fresh_client():
+    llm.use_api_key("sk-old")
     old = llm.get_client(llm.FAST_TIMEOUT)
-    monkeypatch.setattr(llm, "retrieve_openai_key", lambda: "sk-new")
+    llm.use_api_key("sk-new")
     assert llm.get_client(llm.FAST_TIMEOUT) is not old
 
 

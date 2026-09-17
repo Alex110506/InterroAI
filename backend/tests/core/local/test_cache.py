@@ -1,63 +1,21 @@
 """
 The Redis cache.
 
-Two properties matter more than anything else here: that a cached value is the
-same value that went in, and that *no* failure of the cache can fail the app.
-The in-memory double from `conftest.py` stands in for the server, so these
-tests exercise the real keying and packing without one.
+One thing is cached here: the AST repo map the coder opens with. Embeddings are
+the cloud's business — the worker caches those in Postgres, next to the platform
+key — so nothing on this machine holds a vector.
+
+Two properties matter more than anything else: that a cached value is the same
+value that went in, and that *no* failure of the cache can fail the app. The
+in-memory double from `conftest.py` stands in for the server, so these tests
+exercise the real keying without one.
 """
 from __future__ import annotations
 
-import pytest
 from conftest import FakeRedis
 from redis.exceptions import RedisError
 
 import core.local.cache as cache
-
-# ── Vectors ──────────────────────────────────────────────────────────────────
-
-
-async def test_a_vector_survives_the_round_trip():
-    key = cache.vector_key("some chunk", "text-embedding-3-small")
-    await cache.set_vectors({key: [0.25, -0.5, 0.75]})
-
-    assert await cache.get_vectors([key]) == pytest.approx({key: [0.25, -0.5, 0.75]})
-
-
-async def test_an_uncached_key_is_simply_absent():
-    assert await cache.get_vectors(["interroai:v1:vec:m:nope"]) == {}
-
-
-async def test_asking_for_nothing_touches_no_server(fake_redis):
-    assert await cache.get_vectors([]) == {}
-    assert fake_redis.reads == 0
-
-
-async def test_storing_nothing_touches_no_server(fake_redis):
-    await cache.set_vectors({})
-    assert fake_redis.sets == 0
-
-
-async def test_identical_text_maps_to_one_key():
-    model = "text-embedding-3-small"
-    assert cache.vector_key("def f(): ...", model) == cache.vector_key("def f(): ...", model)
-
-
-async def test_different_models_never_share_a_key():
-    """
-    Two models produce incompatible vectors for identical text; sharing a key
-    would silently corrupt every search.
-    """
-    assert cache.vector_key("x", "text-embedding-3-small") != cache.vector_key("x", "other")
-
-
-async def test_a_corrupt_value_reads_as_a_miss(fake_redis):
-    """A truncated or foreign value must not crash the caller — it recomputes."""
-    key = cache.vector_key("chunk", "m")
-    fake_redis.store[key] = b"\x01\x02\x03"  # not a whole number of float32s
-
-    assert await cache.get_vectors([key]) == {}
-
 
 # ── Repo map ─────────────────────────────────────────────────────────────────
 
@@ -85,19 +43,21 @@ async def test_an_empty_map_is_still_a_hit():
     assert await cache.get_repo_map("/proj", "fp") == ""
 
 
+async def test_reading_an_unwritten_map_is_a_plain_miss():
+    assert await cache.get_repo_map("/never-indexed", "fp") is None
+
+
 # ── Degradation ──────────────────────────────────────────────────────────────
 
 
 async def test_reads_miss_when_redis_is_unreachable(fake_redis):
     fake_redis.broken = True
-    assert await cache.get_vectors([cache.vector_key("x", "m")]) == {}
     assert await cache.get_repo_map("/proj", "fp") is None
 
 
 async def test_writes_are_dropped_when_redis_is_unreachable(fake_redis):
     fake_redis.broken = True
-    await cache.set_vectors({cache.vector_key("x", "m"): [0.1]})  # must not raise
-    await cache.set_repo_map("/proj", "fp", "map")                # must not raise
+    await cache.set_repo_map("/proj", "fp", "map")  # must not raise
 
 
 async def test_the_first_failure_explains_itself_once(fake_redis, caplog):
@@ -105,7 +65,7 @@ async def test_the_first_failure_explains_itself_once(fake_redis, caplog):
     with caplog.at_level("WARNING", logger="core.local.cache"):
         await cache.get_repo_map("/proj", "fp")
         await cache.get_repo_map("/proj", "fp")
-        await cache.get_vectors([cache.vector_key("x", "m")])
+        await cache.get_repo_map("/other", "fp")
 
     warnings = [r for r in caplog.records if "Redis is not available" in r.message]
     assert len(warnings) == 1, "a down cache must not spam the log on every call"
@@ -133,17 +93,12 @@ async def test_reset_clears_the_unavailable_flag(fake_redis):
     assert cache._unavailable is False
 
 
-async def test_a_pipeline_failure_is_absorbed(monkeypatch):
-    """Writes go through a pipeline, whose `execute` can fail on its own."""
-    class BrokenPipeline:
-        def set(self, *args, **kwargs):
-            return self
+async def test_a_write_failure_is_absorbed(monkeypatch):
+    """The cache is an accelerator: a server that fails mid-write changes nothing."""
 
-        async def execute(self):
+    class BrokenClient(FakeRedis):
+        async def set(self, key, value, ex=None):
             raise RedisError("gone mid-write")
 
-    client = FakeRedis()
-    monkeypatch.setattr(client, "pipeline", lambda transaction=False: BrokenPipeline())
-    monkeypatch.setattr(cache, "_client", client)
-
-    await cache.set_vectors({cache.vector_key("x", "m"): [0.1]})  # must not raise
+    monkeypatch.setattr(cache, "_client", BrokenClient())
+    await cache.set_repo_map("/proj", "fp", "map")  # must not raise

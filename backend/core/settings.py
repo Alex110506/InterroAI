@@ -1,15 +1,14 @@
 """
-Runtime settings: which build this process is (fully local, or a cloud client)
-and, when the Electron app started it, how it keeps everything else out.
+Runtime settings: where the Cloud API is and, when the Electron app started this
+process, how it keeps everything else out.
 
 Read from environment variables prefixed `INTERROAI_` and from the repo-root
-`.env` that docker compose also reads. `core/providers.py` turns `mode` into
-concrete implementations of the ports; `main.py` turns the rest into middleware.
+`.env` that docker compose also reads. `core/providers.py` turns `api_url` into
+the cloud clients; `main.py` turns the rest into middleware.
 """
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Literal
 
 from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -20,9 +19,7 @@ class RuntimeSettings(BaseSettings):
         env_prefix="INTERROAI_", env_file=("../.env", ".env"), extra="ignore"
     )
 
-    #: local: OpenAI directly and Chroma on disk. cloud: through the Cloud API.
-    mode: Literal["local", "cloud"] = "local"
-    #: The Cloud API, used only when `mode == "cloud"`.
+    #: The Cloud API this runtime uses for models and for the index.
     api_url: str = "http://localhost:8080"
 
     #: Made by the Electron app each time it starts this process, and required

@@ -25,7 +25,7 @@ def test_health_reports_ok(client):
     assert body["version"] == app.version
 
 
-def test_health_needs_no_api_key(client, without_api_key):
+def test_health_needs_no_credentials(client):
     """It is the readiness probe a remote client polls before connecting."""
     assert client.get("/health").status_code == 200
 
@@ -57,43 +57,18 @@ def test_the_console_entry_point_exists():
 # ── Settings ─────────────────────────────────────────────────────────────────
 
 
-def test_settings_report_no_key_when_none_is_stored(client, fake_keyring):
-    assert client.get("/api/settings").json()["has_api_key"] is False
-
-
-def test_saving_a_key_stores_it_in_the_keychain(client, fake_keyring):
-    client.post("/api/settings", json={"name": "Alex", "apiKey": "sk-secret"})
-    assert fake_keyring[("interroai", "openai_api_key")] == "sk-secret"
-
-
-def test_the_key_is_never_echoed_back(client, fake_keyring):
-    """The whole point of keychain storage — the value must not leave it."""
-    post = client.post("/api/settings", json={"name": "Alex", "apiKey": "sk-secret"})
-    get = client.get("/api/settings")
-    assert "sk-secret" not in post.text
-    assert "sk-secret" not in get.text
-
-
-def test_settings_report_a_key_once_one_is_stored(client, fake_keyring):
-    client.post("/api/settings", json={"name": "Alex", "apiKey": "sk-secret"})
-    assert client.get("/api/settings").json()["has_api_key"] is True
-
-
-def test_the_user_name_round_trips(client, fake_keyring):
-    client.post("/api/settings", json={"name": "Alex", "apiKey": ""})
+def test_the_user_name_round_trips(client):
+    client.post("/api/settings", json={"name": "Alex"})
     assert client.get("/api/settings").json()["name"] == "Alex"
 
 
-def test_saving_without_a_key_leaves_the_stored_one_intact(client, fake_keyring):
-    """Renaming yourself must not wipe your credentials."""
-    client.post("/api/settings", json={"name": "Alex", "apiKey": "sk-secret"})
-    client.post("/api/settings", json={"name": "Renamed", "apiKey": ""})
-    assert fake_keyring[("interroai", "openai_api_key")] == "sk-secret"
-    assert client.get("/api/settings").json()["has_api_key"] is True
+def test_the_settings_carry_nothing_but_the_name(client):
+    """Model access is the platform's: this machine stores no credential to report."""
+    assert set(client.get("/api/settings").json()) == {"name"}
 
 
-def test_an_over_long_name_is_rejected(client, fake_keyring):
-    assert client.post("/api/settings", json={"name": "x" * 200, "apiKey": ""}).status_code == 422
+def test_an_over_long_name_is_rejected(client):
+    assert client.post("/api/settings", json={"name": "x" * 200}).status_code == 422
 
 
 def test_settings_accept_an_empty_body(client, fake_keyring):
