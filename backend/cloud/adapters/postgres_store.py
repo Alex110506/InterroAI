@@ -6,9 +6,8 @@ serves the worker, in a service scope, and the API, where a user scope lets
 row-level security guarantee a search can only ever see that user's projects.
 
 `apply` is one transaction: the reset, the prune and the upsert commit together
-or not at all. That is what the Chroma adapter can only approximate by ordering
-its writes, and what makes "a search sees the index from before the job or
-after it" literally true.
+or not at all, which is what makes "a search sees the index from before the job
+or after it" literally true.
 """
 from __future__ import annotations
 

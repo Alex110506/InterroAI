@@ -54,18 +54,9 @@ _MODEL_MAP: dict[str, str] = {
 }
 
 # Reasoning models reject `temperature` and take `reasoning_effort` instead.
-# Every GPT-5.6 model reasons; the o-series stays listed because a raw OpenAI
-# id passes through `_MODEL_MAP` unchanged and must still be handled correctly.
-_REASONING_MODELS = {
-    "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
-    "o1", "o1-mini", "o1-preview", "o3", "o3-mini", "o4-mini",
-}
-
-# Models whose streaming is unreliable, so their plan is fetched in one call.
-# Only the o1 family. This used to be gated on "is it a reasoning model", which
-# was the same set in practice — but now every model the app offers reasons, and
-# that would silence the streamed plan the right-hand panel exists to show.
-_NO_STREAM_MODELS = {"o1", "o1-mini", "o1-preview"}
+# Every model the app offers reasons, and only these may reach the agent:
+# `session.py` validates the caller's choice against `_MODEL_MAP` first.
+_REASONING_MODELS = {"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"}
 
 # ── Tool schemas ──────────────────────────────────────────────────────────────
 
@@ -325,17 +316,6 @@ class CoderAgent:
             *self._history,
             {"role": "user", "content": f"{knowledge_tree}\n\nTASK:\n{prompt}"},
         ]
-
-        if self._api_model in _NO_STREAM_MODELS:
-            # Streaming is unreliable here, so take the whole plan in one call.
-            response = await self._gateway.chat(
-                timeout=LONG_TIMEOUT,
-                **self._build_create_kwargs(messages=messages, temperature=0.2),
-            )
-            content = response.choices[0].message.content or ""
-            yield {"type": "plan_chunk", "chunk": content}
-            yield {"type": "plan", "content": content}
-            return
 
         # Streaming: emit tokens as they arrive so the right panel fills live.
         # Only the handshake is retried; see ModelGateway.chat_stream.

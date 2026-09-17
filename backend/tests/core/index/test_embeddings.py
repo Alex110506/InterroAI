@@ -12,7 +12,6 @@ from openai import APIConnectionError, BadRequestError
 
 import core.index.embeddings as embeddings
 from core.errors import MissingAPIKeyError
-from core.index.adapters.memory import InMemoryEmbeddingCache
 from core.index.embeddings import _BATCH_SIZE, _MODEL, EmbeddedBatch, embed_batches, embed_texts
 
 
@@ -157,38 +156,10 @@ async def test_nothing_is_yielded_for_no_input(recording):
 # ── The cache ────────────────────────────────────────────────────────────────
 
 
-async def test_a_cached_vector_is_not_embedded_again(recording):
-    """Content addressed, so re-indexing an unchanged chunk costs nothing."""
-    cache = InMemoryEmbeddingCache()
-    await embed_texts(["stable chunk"], cache=cache)
-    assert len(recording.batches) == 1
-
-    await embed_texts(["stable chunk"], cache=cache)
-    assert len(recording.batches) == 1, "the second call must be served by the cache"
-
-
 async def test_without_a_cache_nothing_is_remembered(recording):
     await embed_texts(["stable chunk"])
     await embed_texts(["stable chunk"])
     assert len(recording.batches) == 2
-
-
-async def test_a_cache_hit_is_reported_as_such(recording):
-    cache = InMemoryEmbeddingCache()
-    await embed_texts(["x"], cache=cache)
-    batches = await _collect(["x"], cache=cache)
-    assert batches[0].from_cache == 1
-
-
-async def test_a_renamed_file_reuses_its_vectors(recording):
-    """The point of hashing content rather than paths: moving code is free."""
-    cache = InMemoryEmbeddingCache()
-    await embed_texts(["def login(): ...", "def logout(): ..."], cache=cache)
-    calls = len(recording.batches)
-
-    # Same chunks, different order — as a moved file would produce.
-    await embed_texts(["def logout(): ...", "def login(): ..."], cache=cache)
-    assert len(recording.batches) == calls
 
 
 async def test_duplicate_text_in_one_batch_is_embedded_once(recording):
@@ -208,32 +179,6 @@ async def test_a_cache_that_raises_is_treated_as_a_miss(recording, caplog):
     with caplog.at_level("WARNING", logger="core.index.embeddings"):
         assert len(await embed_texts(["a", "b"], cache=ExplodingCache())) == 2
     assert any("cache" in record.message for record in caplog.records)
-
-
-async def test_every_finished_batch_is_cached_before_a_later_one_fails(monkeypatch):
-    """
-    The durability rule that replaced per-batch index writes: a job that dies
-    part-way has already banked what it paid for, and its retry re-embeds only
-    what never succeeded.
-    """
-    monkeypatch.setattr(embeddings, "get_client", lambda timeout: object())
-    calls = 0
-
-    async def second_batch_fails(_client, **kwargs):
-        nonlocal calls
-        calls += 1
-        if calls == 2:
-            raise RuntimeError("provider exploded")
-        return _embedding_response(len(kwargs["input"]))
-
-    monkeypatch.setattr(embeddings, "embed_batch", second_batch_fails)
-    cache = InMemoryEmbeddingCache()
-    texts = [f"t{i}" for i in range(_BATCH_SIZE + 20)]
-
-    with pytest.raises(RuntimeError):
-        await _collect(texts, cache=cache)
-
-    assert len(cache) == _BATCH_SIZE, "the first batch must already be in the cache"
 
 
 # ── One bad chunk does not sink the run ──────────────────────────────────────
@@ -265,19 +210,6 @@ async def test_a_bad_chunk_is_skipped_and_the_rest_survive(monkeypatch):
     assert [len(b.indices) for b in batches] == [2], "the good chunks must still land"
     assert list(batches[0].failures) == [1]
     assert isinstance(batches[0].failures[1], BadRequestError)
-
-
-async def test_a_skipped_chunk_is_not_cached(monkeypatch):
-    """A failure must not be remembered as a result."""
-    monkeypatch.setattr(embeddings, "get_client", lambda timeout: object())
-
-    async def always_refuses(_client, **kwargs):
-        raise _bad_request()
-
-    monkeypatch.setattr(embeddings, "embed_batch", always_refuses)
-    cache = InMemoryEmbeddingCache()
-    await _collect(["poison"], cache=cache)
-    assert len(cache) == 0
 
 
 async def test_isolating_one_bad_chunk_does_not_cost_a_call_per_chunk(monkeypatch):

@@ -6,8 +6,8 @@ one `ChunkUpload` — chunks the runtime already cut and hashed — and knows
 nothing about where they came from: it opens no project files and reads no
 `.gitignore`. That is what lets it run on a machine that has never seen the
 repository, and `tests/test_boundaries.py` keeps it that way. The store and the
-cache are handed in as ports (`core/index/ports.py`), so the same code runs
-over Chroma on a laptop and pgvector in Azure.
+cache are handed in as ports (`core/index/ports.py`), so this code names no
+implementation: in Azure they are pgvector and a Postgres table.
 
 It yields the C (embedding) and D (writing) steps and the final summary. A
 failure becomes an `error` event rather than an exception, because a worker has
@@ -69,8 +69,7 @@ def _unique(chunks: list[Chunk]) -> list[Chunk]:
 
     An id is `file_path:start_line`, so two chunks starting on the same line
     describe a single storable row. Postgres refuses a statement that would
-    update one row twice, and Chroma would quietly keep whichever came last —
-    so the choice is made here instead, before the embedding bill and the
+    update one row twice — so the choice is made here instead, before the embedding bill and the
     progress counts are calculated from it. The upload is written by the
     client, which is why a malformed one must not be able to fail a whole job.
     """

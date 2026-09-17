@@ -243,12 +243,6 @@
   text-align: left;
 }
 
-.agentText {
-  font-size: 14px;
-  line-height: 1.7;
-  color: var(--text);
-}
-
 /* ─── Markdown prose ─── */
 .agentMd {
   font-size: 14px;

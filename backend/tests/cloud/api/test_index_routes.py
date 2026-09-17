@@ -31,7 +31,6 @@ from cloud.db.projects import ProjectRepository
 from cloud.db.session import anonymous_scope, service_scope
 from cloud.db.usage import PostgresUsageMeter, Quota
 from contracts.indexing import Chunk, ChunkUpload, IndexEvent, IndexJobMessage
-from core.index.adapters.memory import InMemoryJobQueue
 from core.index.ports import IndexedChunk
 
 pytestmark = pytest.mark.integration
@@ -44,6 +43,19 @@ def _axis(position: int) -> list[float]:
     vector = [0.0] * EMBEDDING_DIMENSIONS
     vector[position] = 1.0
     return vector
+
+
+class _RecordingQueue:
+    """
+    All the index routes need of a queue: somewhere to put a message. The one
+    test that watches a message come back out swaps in the emulator's queue.
+    """
+
+    def __init__(self) -> None:
+        self.messages: list[IndexJobMessage] = []
+
+    async def enqueue(self, message: IndexJobMessage) -> None:
+        self.messages.append(message)
 
 
 @pytest.fixture
@@ -63,7 +75,7 @@ async def api(app_sessions, blob_uploads):
         projects=ProjectRepository(app_sessions),
         sessions=app_sessions,
         uploads=blob_uploads,
-        queue=InMemoryJobQueue(),
+        queue=_RecordingQueue(),
         embed_query=embed_query,
         usage=PostgresUsageMeter(lambda: anonymous_scope(app_sessions)),
         limits=Limits(

@@ -83,17 +83,6 @@ def _give_up(exc: BaseException) -> None:
         )
 
 
-async def reset() -> None:
-    """Forget the client and the unavailable flag. For tests and key rotation."""
-    global _client, _unavailable
-    client, _client, _unavailable = _client, None, False
-    if client is not None:
-        try:
-            await client.aclose()
-        except (RedisError, OSError):
-            pass
-
-
 def _digest(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8", errors="replace")).hexdigest()
 

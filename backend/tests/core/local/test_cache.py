@@ -84,15 +84,6 @@ async def test_an_unavailable_cache_stops_being_retried(fake_redis):
     assert await cache.get_repo_map("/proj", "fp") is None
 
 
-async def test_reset_clears_the_unavailable_flag(fake_redis):
-    fake_redis.broken = True
-    await cache.get_repo_map("/proj", "fp")
-    assert cache._unavailable is True
-
-    await cache.reset()
-    assert cache._unavailable is False
-
-
 async def test_a_write_failure_is_absorbed(monkeypatch):
     """The cache is an accelerator: a server that fails mid-write changes nothing."""
 

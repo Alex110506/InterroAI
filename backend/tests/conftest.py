@@ -4,7 +4,7 @@ Shared fixtures.
 The HOME redirect at the top of this module is load-bearing and must stay
 before every application import: `config.py` instantiates `_AppConfig()` at
 *import* time, which writes into `~/.interroai`. Redirecting HOME first keeps
-the developer's real config and Chroma store untouched by a test run.
+the developer's real config untouched by a test run.
 
 Model calls are faked at the `ModelGateway` port (`FakeGateway`, handed to the
 code under test), not by patching `core.models.llm`. Only the tests of `core.models.llm`

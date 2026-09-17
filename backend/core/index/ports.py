@@ -2,13 +2,12 @@
 The interfaces behind the index: what indexing needs, not who provides it.
 
 `indexer.py`, `embeddings.py` and `semantic_index.py` are written against these,
-and each has a local implementation in `core/index/adapters/` and a cloud one
-in `cloud/adapters/`:
+and each is implemented in `cloud/adapters/`:
 
-  ChunkStore       vectors and locations           Chroma on disk     │ Postgres + pgvector
-  EmbeddingCache   vectors by content hash         Redis (optional)   │ a Postgres table
-  UploadStore      one job's chunks, by reference  a dict             │ Azure Blob Storage
-  JobQueue         index jobs, acknowledged        asyncio.Queue      │ Azure Service Bus
+  ChunkStore       vectors and locations           Postgres + pgvector
+  EmbeddingCache   vectors by content hash         a Postgres table
+  UploadStore      one job's chunks, by reference  Azure Blob Storage
+  JobQueue         index jobs, acknowledged        Azure Service Bus
 
 What every implementation must do the same way is pinned by the suites in
 `tests/port_contracts/`, which run against each of them.

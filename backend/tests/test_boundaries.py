@@ -62,7 +62,6 @@ _BEHIND_THE_PORTS = (
     "openai",
     "core.models.llm",
     "core.models.gateway.OpenAIGateway",
-    "core.index.adapters",
     "core.index.embeddings",
     "core.index.indexer",
     "core.remote",
@@ -76,7 +75,7 @@ def test_the_runtime_reaches_models_and_the_index_only_through_ports(module):
     assert _violations(module, _BEHIND_THE_PORTS) == []
 
 
-@pytest.mark.parametrize("module", _modules("core/index", "core/index/adapters"))
+@pytest.mark.parametrize("module", _modules("core/index"))
 def test_the_index_service_never_reaches_into_the_workspace(module):
     """It moves to the cloud, where there is no workspace to reach into."""
     assert _violations(module, ("core.workspace", "agents", "api")) == []
@@ -100,7 +99,6 @@ def test_the_cloud_clients_stay_clients(module):
         "agents",
         "api",
         "core.models.llm",
-        "core.index.adapters",
         "core.index.embeddings",
         "core.index.indexer",
     )
@@ -116,7 +114,7 @@ def test_the_contracts_depend_on_nothing_else_in_the_backend(module):
     "module",
     _modules(
         "agents", "api", "core", "core/models", "core/workspace",
-        "core/index", "core/index/adapters", "core/local", "core/remote",
+        "core/index", "core/local", "core/remote",
     ),
 )
 def test_the_runtime_never_imports_the_cloud_side(module):
@@ -139,6 +137,6 @@ def test_the_guard_can_see_imports_at_all():
 
     folders = (
         "agents", "api", "contracts", "core/workspace",
-        "core/index", "core/index/adapters", "core/models", "core/local",
+        "core/index", "core/models", "core/local",
     )
     assert all(_modules(folder) for folder in folders)

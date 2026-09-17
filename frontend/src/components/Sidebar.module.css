@@ -40,30 +40,6 @@
   background: var(--bg-hover);
 }
 
-.navGroup {
-  margin-top: 2px;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-
-.navItem {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  padding: 7px 10px;
-  border-radius: var(--radius-sm);
-  color: var(--text-2);
-  font-size: 13px;
-  width: 100%;
-  transition: background 0.13s, color 0.13s;
-}
-
-.navItem:hover {
-  background: var(--bg-hover);
-  color: var(--text);
-}
-
 .nav::after {
   content: '';
   display: block;
