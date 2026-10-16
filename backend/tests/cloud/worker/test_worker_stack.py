@@ -11,7 +11,7 @@ from uuid import uuid4
 import pytest
 
 import core.index.indexer as indexer
-from cloud.adapters.pg_cache import PostgresEmbeddingCache
+from cloud.adapters.postgres_cache import PostgresEmbeddingCache
 from cloud.adapters.postgres_store import PostgresChunkStore
 from cloud.db.jobs import JobRepository
 from cloud.db.models import EMBEDDING_DIMENSIONS

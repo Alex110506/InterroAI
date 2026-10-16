@@ -6,7 +6,7 @@ from urllib.parse import parse_qs, urlsplit
 import httpx
 import pytest
 
-from cloud.api.github import TOKEN_URL, USER_URL, GitHubError, GitHubIdentity, GitHubOAuth
+from cloud.auth.github import TOKEN_URL, USER_URL, GitHubError, GitHubIdentity, GitHubOAuth
 
 CALLBACK = "http://localhost:8080/auth/github/callback"
 

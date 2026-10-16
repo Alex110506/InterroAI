@@ -223,38 +223,17 @@ def without_api_key():
 # ── Isolated persistence ─────────────────────────────────────────────────────
 
 
-class FakePipeline:
-    """`core.local.cache` queues SETs and executes them in one go."""
-
-    def __init__(self, client: FakeRedis) -> None:
-        self._client = client
-        self._queued: list[tuple[str, bytes]] = []
-
-    def set(self, key, value, ex=None):
-        self._queued.append((key, value))
-        return self
-
-    async def execute(self):
-        self._client.fail_if_broken()
-        for key, value in self._queued:
-            self._client.store[key] = value
-        self._client.sets += len(self._queued)
-        return [True] * len(self._queued)
-
-
 class FakeRedis:
     """
     The slice of `redis.asyncio.Redis` that `core.local.cache` actually uses.
 
-    In-memory, so `core/local/cache.py`'s own keying and float32 packing still get
+    In-memory, so `core/local/cache.py`'s own keying and encoding still get
     exercised by every test that reaches the cache, without a server.
     """
 
     def __init__(self, *, broken: bool = False) -> None:
         self.store: dict[str, bytes] = {}
         self.broken = broken
-        self.reads = 0
-        self.sets = 0
 
     def fail_if_broken(self) -> None:
         if self.broken:
@@ -262,25 +241,12 @@ class FakeRedis:
 
     async def get(self, key):
         self.fail_if_broken()
-        self.reads += 1
         return self.store.get(key)
 
     async def set(self, key, value, ex=None):
         self.fail_if_broken()
-        self.sets += 1
         self.store[key] = value
         return True
-
-    async def mget(self, keys):
-        self.fail_if_broken()
-        self.reads += 1
-        return [self.store.get(key) for key in keys]
-
-    def pipeline(self, transaction=False):
-        return FakePipeline(self)
-
-    async def aclose(self):
-        return None
 
 
 @pytest.fixture(autouse=True)

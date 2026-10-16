@@ -18,8 +18,8 @@ from fastapi.testclient import TestClient
 
 from cloud.api.main import create_app
 from cloud.api.services import Services, build_services
-from cloud.api.signin import SignInService
-from cloud.api.tokens import TokenSigner
+from cloud.auth.signin import SignInService
+from cloud.auth.tokens import TokenSigner
 from cloud.settings import ApiSettings
 
 VERIFIER = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"

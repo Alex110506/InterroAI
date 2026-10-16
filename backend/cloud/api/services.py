@@ -17,14 +17,14 @@ import httpx
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from cloud.adapters.blob_uploads import BlobUploadStore
-from cloud.adapters.pg_cache import PostgresEmbeddingCache
+from cloud.adapters.postgres_cache import PostgresEmbeddingCache
 from cloud.adapters.service_bus import ServiceBusJobQueue
-from cloud.api.github import GitHubOAuth
-from cloud.api.job_events import JobNotifications, asyncpg_dsn
-from cloud.api.signin import SignInService
 from cloud.api.throttle import RateLimiter, RateLimits
-from cloud.api.tokens import TokenSigner
+from cloud.auth.github import GitHubOAuth
+from cloud.auth.signin import SignInService
+from cloud.auth.tokens import TokenSigner
 from cloud.db.accounts import Accounts, PostgresAccounts
+from cloud.db.notifications import JobNotifications, asyncpg_dsn
 from cloud.db.projects import ProjectRepository
 from cloud.db.session import anonymous_scope, create_engine, create_session_factory
 from cloud.db.usage import PostgresUsageMeter, Quota, UsageMeter

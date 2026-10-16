@@ -16,13 +16,14 @@ from datetime import timedelta
 
 import httpx
 import pytest
+from fakes.queue import InMemoryJobQueue
 
 import core.index.indexer as indexer
-from cloud.adapters.pg_cache import PostgresEmbeddingCache
+from cloud.adapters.postgres_cache import PostgresEmbeddingCache
 from cloud.adapters.postgres_store import PostgresChunkStore
 from cloud.api.main import create_app
 from cloud.api.services import Limits, Services
-from cloud.api.tokens import TokenSigner
+from cloud.auth.tokens import TokenSigner
 from cloud.db.accounts import PostgresAccounts
 from cloud.db.jobs import JobRepository
 from cloud.db.models import EMBEDDING_DIMENSIONS
@@ -49,40 +50,6 @@ def _vector_for(text: str) -> list[float]:
     return vector
 
 
-class _Delivery:
-    def __init__(self, queue, message) -> None:
-        self.message = message
-        self.delivery_count = 1
-        self._queue = queue
-
-    async def complete(self) -> None:
-        pass
-
-    async def abandon(self) -> None:
-        await self._queue.enqueue(self.message)
-
-    async def dead_letter(self, reason: str) -> None:
-        self._queue.dead_letters.append((self.message, reason))
-
-
-class _InProcessQueue:
-    """
-    The single dependency this test keeps in-process: the worker's own queue.
-    Everything else here is real — the API, Postgres, Blob Storage and the
-    worker loop consuming alongside.
-    """
-
-    def __init__(self) -> None:
-        self._messages: asyncio.Queue = asyncio.Queue()
-        self.dead_letters: list[tuple[object, str]] = []
-
-    async def enqueue(self, message) -> None:
-        await self._messages.put(message)
-
-    async def receive(self) -> _Delivery:
-        return _Delivery(self, await self._messages.get())
-
-
 @pytest.fixture
 async def remote_index(app_sessions, blob_uploads, fake_keyring, tmp_path, monkeypatch):
     async def fake_batches(texts, **kwargs):
@@ -101,7 +68,7 @@ async def remote_index(app_sessions, blob_uploads, fake_keyring, tmp_path, monke
     async def embed_query(query: str) -> list[float]:
         return _vector_for(query)
 
-    queue = _InProcessQueue()
+    queue = InMemoryJobQueue()
     signer = TokenSigner("t" * 32, issuer=CLOUD, access_ttl=timedelta(minutes=15))
     accounts = PostgresAccounts(anonymous)
     services = Services(

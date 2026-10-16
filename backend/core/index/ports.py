@@ -10,7 +10,8 @@ and each is implemented in `cloud/adapters/`:
   JobQueue         index jobs, acknowledged        Azure Service Bus
 
 What every implementation must do the same way is pinned by the suites in
-`tests/port_contracts/`, which run against each of them.
+`tests/port_contracts/`, which run against these adapters and against any
+in-memory fake the tests stand in for one (`tests/fakes/`).
 """
 from __future__ import annotations
 

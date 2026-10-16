@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from urllib.parse import urlencode
 
-from cloud.api.github import GitHubIdentity
+from cloud.auth.github import GitHubIdentity
 
 
 class FakeGitHub:

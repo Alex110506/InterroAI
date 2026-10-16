@@ -19,11 +19,12 @@ from uuid import uuid4
 
 import httpx
 import pytest
+from fakes.queue import InMemoryJobQueue
 
 from cloud.adapters.postgres_store import PostgresChunkStore
 from cloud.api.main import create_app
 from cloud.api.services import Limits, Services
-from cloud.api.tokens import TokenSigner
+from cloud.auth.tokens import TokenSigner
 from cloud.db.accounts import PostgresAccounts
 from cloud.db.jobs import JobRepository
 from cloud.db.models import EMBEDDING_DIMENSIONS
@@ -45,19 +46,6 @@ def _axis(position: int) -> list[float]:
     return vector
 
 
-class _RecordingQueue:
-    """
-    All the index routes need of a queue: somewhere to put a message. The one
-    test that watches a message come back out swaps in the emulator's queue.
-    """
-
-    def __init__(self) -> None:
-        self.messages: list[IndexJobMessage] = []
-
-    async def enqueue(self, message: IndexJobMessage) -> None:
-        self.messages.append(message)
-
-
 @pytest.fixture
 async def api(app_sessions, blob_uploads):
     signer = TokenSigner("i" * 32, issuer="http://testserver", access_ttl=timedelta(minutes=15))
@@ -75,7 +63,7 @@ async def api(app_sessions, blob_uploads):
         projects=ProjectRepository(app_sessions),
         sessions=app_sessions,
         uploads=blob_uploads,
-        queue=_RecordingQueue(),
+        queue=InMemoryJobQueue(),
         embed_query=embed_query,
         usage=PostgresUsageMeter(lambda: anonymous_scope(app_sessions)),
         limits=Limits(

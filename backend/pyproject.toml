@@ -69,6 +69,7 @@ packages = [
     "cloud",
     "cloud.adapters",
     "cloud.api",
+    "cloud.auth",
     "cloud.db",
     "cloud.worker",
     "contracts",

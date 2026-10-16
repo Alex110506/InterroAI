@@ -39,9 +39,8 @@ _DEFAULT_URL = "redis://localhost:6379/0"
 #: bumping this abandons the old keys instead of misreading them.
 _PREFIX = "interroai:v1"
 
-#: Entries are self-invalidating (both key spaces are content- or
-#: fingerprint-addressed), so the TTL is only there to stop dead keys from
-#: accumulating forever after a file changes.
+#: Entries are self-invalidating (the key carries the fingerprint), so the TTL
+#: is only there to stop dead keys from accumulating forever after a file changes.
 _TTL_SECONDS = 30 * 24 * 60 * 60
 
 #: Fail fast. A cache that blocks the app for seconds is worse than no cache.
@@ -77,7 +76,7 @@ def _give_up(exc: BaseException) -> None:
         _unavailable = True
         logger.warning(
             "Redis is not available (%s) — continuing without the cache. "
-            "Start a local redis-server, or set %s, to speed up re-indexing.",
+            "Start a local redis-server, or set %s, to speed up repeat requests.",
             exc,
             _URL_ENV,
         )

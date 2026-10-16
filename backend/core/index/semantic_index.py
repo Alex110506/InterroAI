@@ -14,8 +14,9 @@ text; the caller reads the lines from its own disk and uses the hash to tell
 whether they may have moved since.
 
 `core/remote/semantic_index.py` is the implementation, against the Cloud API.
-The worker on the far side assembles the pieces this runtime also uses —
-`diff_manifest`, `run_job` — around the cloud adapters in `cloud/adapters/`.
+Everything behind it — diffing the manifest, embedding, storing — runs in the
+cloud (`cloud/api/indexing.py` and the Embed Worker); this runtime only hashes
+the files and chunks the ones that changed.
 """
 from __future__ import annotations
 

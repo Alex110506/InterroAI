@@ -1,5 +1,5 @@
 """
-What every `UploadStore` must do identically — a dict locally, Blob Storage in the cloud.
+What every `UploadStore` must do identically. `BlobUploadStore` is the only implementation.
 
 Subclass `UploadStoreContract` and provide `uploads`.
 """

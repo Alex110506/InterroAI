@@ -93,12 +93,3 @@ async def anonymous_scope(
     """
     async with sessions() as session, session.begin():
         yield session
-
-
-def as_float_list(value) -> list[float]:
-    """A vector column's value as a plain list, whatever the driver handed back."""
-    if hasattr(value, "tolist"):
-        value = value.tolist()
-    elif hasattr(value, "to_list"):
-        value = value.to_list()
-    return [float(component) for component in value]

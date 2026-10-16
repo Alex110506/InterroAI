@@ -69,9 +69,10 @@ def _unique(chunks: list[Chunk]) -> list[Chunk]:
 
     An id is `file_path:start_line`, so two chunks starting on the same line
     describe a single storable row. Postgres refuses a statement that would
-    update one row twice — so the choice is made here instead, before the embedding bill and the
-    progress counts are calculated from it. The upload is written by the
-    client, which is why a malformed one must not be able to fail a whole job.
+    update one row twice, so the choice is made here instead, before the
+    embedding bill and the progress counts are calculated from it. The upload is
+    written by the client, which is why a malformed one must not be able to fail
+    a whole job.
     """
     by_id = {chunk_id(chunk.file_path, chunk.start_line): chunk for chunk in chunks}
     if len(by_id) == len(chunks):

@@ -17,7 +17,7 @@ import pytest
 from conftest import FakeGateway, make_response, make_tool_call
 
 import agents.coder as coder_mod
-from agents.coder import _MODEL_MAP, _REASONING_MODELS, CoderAgent
+from agents.coder import _MODEL_MAP, CoderAgent
 from contracts.indexing import SearchHit, SearchRequest
 from core.errors import (
     FileNotFoundInProjectError,
@@ -73,15 +73,6 @@ def test_a_tools_free_call_keeps_the_models_own_reasoning(tmp_path):
     assert "reasoning_effort" not in kwargs
 
 
-def test_reasoning_is_not_switched_off_for_a_model_that_never_reasons(tmp_path):
-    """An ordinary model does not accept `reasoning_effort` at all, "none" included."""
-    agent = CoderAgent(str(tmp_path), "gpt-4o-mini")
-
-    kwargs = agent._build_create_kwargs([], tools=[{"t": 1}], tool_choice="auto")
-
-    assert "reasoning_effort" not in kwargs
-
-
 def test_a_known_display_id_resolves_to_its_api_id(tmp_path):
     assert CoderAgent(str(tmp_path), "gpt-5.6-terra")._api_model == "gpt-5.6-terra"
 
@@ -91,35 +82,17 @@ def test_unknown_id_passes_through_unchanged(tmp_path):
     assert CoderAgent(str(tmp_path), "gpt-4o-mini")._api_model == "gpt-4o-mini"
 
 
-@pytest.mark.parametrize("display", ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])
-def test_reasoning_models_are_detected(tmp_path, display):
-    assert CoderAgent(str(tmp_path), display)._is_reasoning is True
-
-
-def test_non_reasoning_model_is_detected(tmp_path):
-    """A raw OpenAI id passes through the map, so older families still resolve."""
-    assert CoderAgent(str(tmp_path), "gpt-4o-mini")._is_reasoning is False
-
-
-def test_temperature_is_omitted_for_reasoning_models(tmp_path):
-    """Reasoning models reject `temperature` outright — sending it is a 400."""
-    a = CoderAgent(str(tmp_path), "gpt-5.6-sol")
-    assert "temperature" not in a._build_create_kwargs([], temperature=0.2)
-
-
-def test_temperature_is_sent_for_ordinary_models(tmp_path):
-    a = CoderAgent(str(tmp_path), "gpt-4o-mini")
-    assert a._build_create_kwargs([], temperature=0.2)["temperature"] == 0.2
+@pytest.mark.parametrize("display", sorted(_MODEL_MAP))
+@pytest.mark.parametrize("extra", [{}, {"tools": [{"t": 1}], "tool_choice": "auto"}])
+def test_temperature_is_never_sent(tmp_path, display, extra):
+    """Every model the app offers reasons, and reasoning models reject `temperature` with a 400."""
+    assert "temperature" not in CoderAgent(str(tmp_path), display)._build_create_kwargs([], **extra)
 
 
 def test_extra_kwargs_are_forwarded(tmp_path):
     a = CoderAgent(str(tmp_path), "gpt-5.6-sol")
     kwargs = a._build_create_kwargs([], tools=[{"t": 1}], tool_choice="auto")
     assert kwargs["tools"] == [{"t": 1}] and kwargs["tool_choice"] == "auto"
-
-
-def test_reasoning_model_set_is_not_empty():
-    assert _REASONING_MODELS
 
 
 # ── Sandbox boundary ─────────────────────────────────────────────────────────
