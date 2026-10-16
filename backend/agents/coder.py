@@ -46,26 +46,13 @@ _MAX_CORRECTIONS = 3
 # Map display-facing model IDs to real OpenAI API model IDs. They are identical
 # for the GPT-5.6 family; the indirection stays because it is also what decides
 # whether a caller's choice is valid (`agents/session.py`) and where an alias
-# for a renamed model would go. Effort is chosen separately, per request.
+# for a renamed model would go. Every model here reasons, so none is ever sent
+# `temperature`, which a reasoning model refuses outright.
 _MODEL_MAP: dict[str, str] = {
     "gpt-5.6-sol":   "gpt-5.6-sol",
     "gpt-5.6-terra": "gpt-5.6-terra",
     "gpt-5.6-luna":  "gpt-5.6-luna",
 }
-
-# Reasoning models reject `temperature` and take `reasoning_effort` instead.
-# Every GPT-5.6 model reasons; the o-series stays listed because a raw OpenAI
-# id passes through `_MODEL_MAP` unchanged and must still be handled correctly.
-_REASONING_MODELS = {
-    "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
-    "o1", "o1-mini", "o1-preview", "o3", "o3-mini", "o4-mini",
-}
-
-# Models whose streaming is unreliable, so their plan is fetched in one call.
-# Only the o1 family. This used to be gated on "is it a reasoning model", which
-# was the same set in practice — but now every model the app offers reasons, and
-# that would silence the streamed plan the right-hand panel exists to show.
-_NO_STREAM_MODELS = {"o1", "o1-mini", "o1-preview"}
 
 # ── Tool schemas ──────────────────────────────────────────────────────────────
 
@@ -232,14 +219,12 @@ class CoderAgent:
         self._history: list[dict] = list(history or [])
         self._path = Path(project_path).resolve()
         self._api_model = _MODEL_MAP.get(model, model)   # display ID → real API ID
-        self._is_reasoning = self._api_model in _REASONING_MODELS
-        # Where model calls and semantic searches go. The agent neither knows
-        # nor cares whether that is OpenAI and a local index, or the cloud.
+        # Where model calls and semantic searches go: ports, so the agent never
+        # knows it is talking to the Cloud API, and a test can hand in fakes.
         self._gateway = gateway or providers.model_gateway()
         self._index = index or providers.semantic_index()
         self._modified: set[str] = set()   # absolute paths of files written/patched
-        logger.info("CoderAgent init: requested=%r  api_model=%r  reasoning=%s",
-                    model, self._api_model, self._is_reasoning)
+        logger.info("CoderAgent init: requested=%r  api_model=%r", model, self._api_model)
 
     # ── Public entry point ─────────────────────────────────────────────────
 
@@ -304,7 +289,7 @@ class CoderAgent:
 
     # ── Phase 1: Planning ──────────────────────────────────────────────────
 
-    def _build_create_kwargs(self, messages: list[dict], temperature: float = 0.2, **extra) -> dict:
+    def _build_create_kwargs(self, messages: list[dict], **extra) -> dict:
         kwargs: dict = {"model": self._api_model, "messages": messages, **extra}
         # These models reason by default, and chat completions refuses function
         # tools together with reasoning — so a tools request must switch it off
@@ -313,10 +298,8 @@ class CoderAgent:
         # supported ... use /v1/responses or set reasoning_effort to 'none'")
         # arrived on a body that never carried the key at all. Tools-free calls —
         # the plan, and the classifier — keep the model's own default reasoning.
-        if self._is_reasoning and kwargs.get("tools"):
+        if kwargs.get("tools"):
             kwargs["reasoning_effort"] = "none"
-        if not self._is_reasoning:
-            kwargs["temperature"] = temperature
         return kwargs
 
     async def _plan(self, prompt: str, knowledge_tree: str):
@@ -326,23 +309,12 @@ class CoderAgent:
             {"role": "user", "content": f"{knowledge_tree}\n\nTASK:\n{prompt}"},
         ]
 
-        if self._api_model in _NO_STREAM_MODELS:
-            # Streaming is unreliable here, so take the whole plan in one call.
-            response = await self._gateway.chat(
-                timeout=LONG_TIMEOUT,
-                **self._build_create_kwargs(messages=messages, temperature=0.2),
-            )
-            content = response.choices[0].message.content or ""
-            yield {"type": "plan_chunk", "chunk": content}
-            yield {"type": "plan", "content": content}
-            return
-
         # Streaming: emit tokens as they arrive so the right panel fills live.
         # Only the handshake is retried; see ModelGateway.chat_stream.
         full = ""
         stream = await self._gateway.chat_stream(
             timeout=LONG_TIMEOUT,
-            **self._build_create_kwargs(messages=messages, temperature=0.2),
+            **self._build_create_kwargs(messages=messages),
         )
         async for chunk in stream:
             token = chunk.choices[0].delta.content or ""
@@ -359,12 +331,7 @@ class CoderAgent:
         for _ in range(_MAX_TOOL_ROUNDS):
             response = await self._gateway.chat(
                 timeout=LONG_TIMEOUT,
-                **self._build_create_kwargs(
-                    messages=messages,
-                    temperature=0.1,
-                    tools=tools,
-                    tool_choice="auto",
-                ),
+                **self._build_create_kwargs(messages=messages, tools=tools, tool_choice="auto"),
             )
             msg = response.choices[0].message
 

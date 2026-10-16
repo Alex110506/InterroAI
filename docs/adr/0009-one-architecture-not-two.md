@@ -45,8 +45,11 @@ and the OpenAI key in the keychain go with it.
   importing OpenAI or the index, and what lets the tests hand in fakes.
 - `chromadb` leaves the `runtime` extra. `redis` stays, for the AST repo map
   alone — still an accelerator, never a dependency.
-- The in-memory adapters are now the test substrate for indexing, and
-  `tests/fakes/index.py::InProcessIndex` runs both halves of Phase 2 in one
-  process, over the same `run_job` the Embed Worker runs in Azure.
+- The in-memory adapters became the test substrate for indexing — and were
+  themselves deleted shortly afterwards, on the same rule: nothing production
+  does not import stays in the shipped packages. `ChunkStore`, `UploadStore`
+  and `JobQueue` behaviour is therefore covered only by the integration suite,
+  against Postgres, Blob Storage and the Service Bus emulator. A unit test that
+  needs a port double now defines the minimum it needs in its own module.
 - `MissingAPIKeyError` now means the **platform's** key is unset — an operator's
   misconfiguration. A user with nothing configured is *signed out* instead.

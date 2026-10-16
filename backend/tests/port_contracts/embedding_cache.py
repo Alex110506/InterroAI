@@ -1,5 +1,5 @@
 """
-What every `EmbeddingCache` must do identically — Redis locally, Postgres in the cloud.
+What every `EmbeddingCache` must do identically. `PostgresEmbeddingCache` is the only one.
 
 Subclass `EmbeddingCacheContract` and provide `cache` and `dimensions`.
 """

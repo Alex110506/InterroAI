@@ -17,7 +17,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from cloud import observability
 from cloud.api.services import Services
-from cloud.api.tokens import AccessClaims, InvalidTokenError
+from cloud.auth.tokens import AccessClaims, InvalidTokenError
 
 _bearer = HTTPBearer(auto_error=False)
 

@@ -29,7 +29,7 @@ from cloud.api.deps import CurrentUser, ServicesDep, api_error, charge_request, 
 from cloud.api.job_events import job_event_stream
 from cloud.api.llm_gateway import upstream_errors
 from cloud.api.services import Services
-from cloud.api.tokens import AccessClaims
+from cloud.auth.tokens import AccessClaims
 from cloud.db.jobs import ActiveJobExistsError, JobRepository
 from cloud.db.session import ScopeFactory, user_scope
 from contracts.indexing import (

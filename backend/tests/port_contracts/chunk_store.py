@@ -1,12 +1,16 @@
 """
-What every `ChunkStore` must do identically — Chroma locally, pgvector in the cloud.
+What every `ChunkStore` must do identically.
+
+`PostgresChunkStore` is the only implementation, so this suite runs against the
+local stack. It stays a shared suite because what `indexer.py` relies on is the
+contract, not the adapter.
 
 Subclass `ChunkStoreContract` in an adapter's test module and provide three
 fixtures:
 
   * `store`        a store for this test;
   * `new_project`  an async factory returning a fresh project id the store
-                   accepts (a path for Chroma, a real `projects` row for Postgres);
+                   accepts (a real `projects` row for Postgres);
   * `dimensions`   the vector size the store is set up for.
 """
 from __future__ import annotations

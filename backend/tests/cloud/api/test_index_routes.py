@@ -19,11 +19,12 @@ from uuid import uuid4
 
 import httpx
 import pytest
+from fakes.queue import InMemoryJobQueue
 
 from cloud.adapters.postgres_store import PostgresChunkStore
 from cloud.api.main import create_app
 from cloud.api.services import Limits, Services
-from cloud.api.tokens import TokenSigner
+from cloud.auth.tokens import TokenSigner
 from cloud.db.accounts import PostgresAccounts
 from cloud.db.jobs import JobRepository
 from cloud.db.models import EMBEDDING_DIMENSIONS
@@ -31,7 +32,6 @@ from cloud.db.projects import ProjectRepository
 from cloud.db.session import anonymous_scope, service_scope
 from cloud.db.usage import PostgresUsageMeter, Quota
 from contracts.indexing import Chunk, ChunkUpload, IndexEvent, IndexJobMessage
-from core.index.adapters.memory import InMemoryJobQueue
 from core.index.ports import IndexedChunk
 
 pytestmark = pytest.mark.integration

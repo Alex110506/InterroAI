@@ -32,7 +32,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from cloud.api.deps import ServicesDep, api_error, charge_request, rate_limit
 from cloud.api.services import Services
-from cloud.api.tokens import AccessClaims
+from cloud.auth.tokens import AccessClaims
 from core.errors import MissingAPIKeyError
 from core.models.gateway import LONG_TIMEOUT
 

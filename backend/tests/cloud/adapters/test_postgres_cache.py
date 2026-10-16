@@ -4,7 +4,7 @@ from __future__ import annotations
 import pytest
 from port_contracts.embedding_cache import EmbeddingCacheContract
 
-from cloud.adapters.pg_cache import PostgresEmbeddingCache
+from cloud.adapters.postgres_cache import PostgresEmbeddingCache
 from cloud.db.models import EMBEDDING_DIMENSIONS
 from cloud.db.session import service_scope
 

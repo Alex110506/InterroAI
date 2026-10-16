@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 import jwt
 import pytest
 
-from cloud.api.tokens import (
+from cloud.auth.tokens import (
     ACCESS_AUDIENCE,
     AccessClaims,
     InvalidTokenError,

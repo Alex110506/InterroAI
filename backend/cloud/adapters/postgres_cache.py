@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 
 from cloud.db.models import EmbeddingCacheEntry
-from cloud.db.session import ScopeFactory, as_float_list
+from cloud.db.session import ScopeFactory
 
 
 class PostgresEmbeddingCache:
@@ -29,7 +29,7 @@ class PostgresEmbeddingCache:
         )
         async with self._scope() as session:
             rows = (await session.execute(statement)).all()
-        return {digest: as_float_list(vector) for digest, vector in rows}
+        return {digest: _as_float_list(vector) for digest, vector in rows}
 
     async def put(self, model: str, vectors: dict[str, list[float]]) -> None:
         if not vectors:
@@ -48,3 +48,12 @@ class PostgresEmbeddingCache:
         )
         async with self._scope() as session:
             await session.execute(statement)
+
+
+def _as_float_list(value) -> list[float]:
+    """A vector column's value as a plain list, whatever the driver handed back."""
+    if hasattr(value, "tolist"):
+        value = value.tolist()
+    elif hasattr(value, "to_list"):
+        value = value.to_list()
+    return [float(component) for component in value]

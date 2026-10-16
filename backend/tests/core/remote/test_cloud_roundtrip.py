@@ -16,13 +16,14 @@ from datetime import timedelta
 
 import httpx
 import pytest
+from fakes.queue import InMemoryJobQueue
 
 import core.index.indexer as indexer
-from cloud.adapters.pg_cache import PostgresEmbeddingCache
+from cloud.adapters.postgres_cache import PostgresEmbeddingCache
 from cloud.adapters.postgres_store import PostgresChunkStore
 from cloud.api.main import create_app
 from cloud.api.services import Limits, Services
-from cloud.api.tokens import TokenSigner
+from cloud.auth.tokens import TokenSigner
 from cloud.db.accounts import PostgresAccounts
 from cloud.db.jobs import JobRepository
 from cloud.db.models import EMBEDDING_DIMENSIONS
@@ -31,7 +32,6 @@ from cloud.db.session import anonymous_scope, service_scope
 from cloud.db.usage import PostgresUsageMeter, Quota
 from cloud.worker.runner import JobRunner
 from contracts.indexing import SearchRequest
-from core.index.adapters.memory import InMemoryJobQueue
 from core.index.embeddings import EmbeddedBatch
 from core.remote.semantic_index import ProjectRegistry, RemoteSemanticIndex
 from core.remote.session import CloudSession

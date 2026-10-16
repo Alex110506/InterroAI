@@ -14,9 +14,9 @@ import pytest
 from fakes.accounts import InMemoryAccounts
 from fakes.github import FakeGitHub
 
-from cloud.api.github import GitHubError, GitHubIdentity
-from cloud.api.signin import SIGNIN_TTL, SignInError, SignInService
-from cloud.api.tokens import SignInState, TokenSigner, digest
+from cloud.auth.github import GitHubError, GitHubIdentity
+from cloud.auth.signin import SIGNIN_TTL, SignInError, SignInService
+from cloud.auth.tokens import SignInState, TokenSigner, digest
 
 SECRET = "k" * 32
 ISSUER = "http://localhost:8080"

@@ -1,10 +1,11 @@
 """
 ModelGateway — the one door every chat-model call goes through.
 
-`OpenAIGateway` opens straight onto OpenAI with the key from the OS keychain.
-The cloud build swaps in a gateway that calls the Web API instead, which holds
-the platform key and enforces per-user quotas; nothing in `agents/` should be
-able to tell the difference, which is why the agents take a `ModelGateway` and
+`OpenAIGateway` opens straight onto OpenAI with the platform key its own
+process configured (`core.models.llm.use_api_key`), and only the Cloud API
+builds one. The desktop runtime always gets the gateway that calls that API
+instead, which holds the key and enforces per-user quotas; nothing in `agents/`
+can tell the difference, which is why the agents take a `ModelGateway` and
 never import `core.models.llm` themselves.
 
 Requests and responses are OpenAI's own chat-completion shapes, on purpose. A
@@ -55,7 +56,7 @@ class ModelGateway(Protocol):
 
 
 class OpenAIGateway:
-    """Direct to OpenAI, with the key stored in the OS keychain."""
+    """Direct to OpenAI, with the platform key this process configured."""
 
     async def chat(self, *, timeout: httpx.Timeout = LONG_TIMEOUT, **request: Any):
         return await chat_completion(get_client(timeout), **request)

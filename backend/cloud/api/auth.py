@@ -1,7 +1,7 @@
 """
 Sign-in routes, and `/me`.
 
-The flow and the reasoning behind it live in `cloud/api/signin.py`. These
+The flow and the reasoning behind it live in `cloud/auth/signin.py`. These
 handlers only translate between HTTP and it. The two browser steps answer a
 person with a page; the token endpoints answer the app with JSON.
 """
@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict
 
 from cloud.api.deps import CurrentUser, ServicesDep, rate_limit_by_address, unauthorized
 from cloud.api.services import CALLBACK_PATH
-from cloud.api.signin import SIGNIN_TTL, SignInError
+from cloud.auth.signin import SIGNIN_TTL, SignInError
 
 router = APIRouter(tags=["auth"])
 

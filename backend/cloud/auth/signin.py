@@ -31,8 +31,8 @@ from datetime import timedelta
 from typing import Protocol
 from urllib.parse import urlencode
 
-from cloud.api.github import GitHubError, GitHubIdentity
-from cloud.api.tokens import (
+from cloud.auth.github import GitHubError, GitHubIdentity
+from cloud.auth.tokens import (
     Clock,
     InvalidTokenError,
     SignInState,

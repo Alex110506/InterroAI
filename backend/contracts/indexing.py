@@ -1,12 +1,11 @@
 """
 The data that crosses between the local runtime and the indexing service.
 
-In this build both halves run in one process, but they already meet only
-through these models: the runtime never touches the vector store, and the
-indexer never touches the filesystem. The cloud build puts HTTP, Service Bus
-and Blob Storage between them, and these shapes are what has to survive that
-move unchanged — so they are plain data, with no I/O and no imports from the
-rest of the backend (`tests/test_boundaries.py` holds that line).
+The two halves meet only through these models: the runtime never touches the
+vector store, and the indexer never touches the filesystem. HTTP, Service Bus
+and Blob Storage sit between them, so these shapes have to survive that trip
+unchanged — they are plain data, with no I/O and no imports from the rest of
+the backend (`tests/test_boundaries.py` holds that line).
 
 The flow they describe, in order:
 

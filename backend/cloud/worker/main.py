@@ -15,7 +15,7 @@ import logging
 import signal
 
 from cloud.adapters.blob_uploads import BlobUploadStore
-from cloud.adapters.pg_cache import PostgresEmbeddingCache
+from cloud.adapters.postgres_cache import PostgresEmbeddingCache
 from cloud.adapters.postgres_store import PostgresChunkStore
 from cloud.adapters.service_bus import ServiceBusJobQueue
 from cloud.db.jobs import JobRepository

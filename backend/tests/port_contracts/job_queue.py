@@ -1,5 +1,5 @@
 """
-What every `JobQueue` must do identically — asyncio locally, Service Bus in the cloud.
+What every `JobQueue` must do identically — Service Bus, and the in-memory fake.
 
 Subclass `JobQueueContract` and provide:
 
