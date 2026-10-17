@@ -40,9 +40,9 @@ class UpstreamLLMError(InterroAIError):
     """
     An OpenAI request failed and could not be recovered.
 
-    Raised after the retry policy in `core.models.llm` has exhausted its attempts, so
-    reaching this means the provider was genuinely unavailable rather than
-    momentarily flaky.
+    Raised after the retry policy in `cloud.llm.openai_client` has exhausted its
+    attempts, so reaching this means the provider was genuinely unavailable
+    rather than momentarily flaky.
     """
 
 

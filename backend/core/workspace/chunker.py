@@ -117,7 +117,7 @@ def chunk_file(path: Path, root: Path) -> list[dict]:
         end_char = start_char + len(content)
         start_line = source[:start_char].count("\n") + 1
         end_line = source[:end_char].count("\n") + 1
-        # A chunk's id is `file_path:start_line` (core/index/ports.py), so two
+        # A chunk's id is `file_path:start_line` (cloud/indexing/ports.py), so two
         # chunks that start on the same line claim one id. It happens wherever a
         # single line is longer than _CHUNK_SIZE - _CHUNK_OVERLAP: the splitter
         # cuts inside that line and both pieces map back to it. Keep whichever

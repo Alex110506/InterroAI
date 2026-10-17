@@ -9,8 +9,8 @@ from uuid import uuid4
 
 import pytest
 
+from cloud.indexing.ports import UploadNotFoundError
 from contracts.indexing import Chunk, ChunkUpload
-from core.index.ports import UploadNotFoundError
 
 
 def _ref() -> str:

@@ -7,7 +7,7 @@
 #
 # The images install requirements-cloud.lock and nothing else: fully pinned,
 # hash-checked, and resolved for every platform. Neither carries the desktop
-# runtime's dependencies (ChromaDB, the chunker, Redis), and
+# runtime's dependencies (pathspec, the chunker, Redis), and
 # tests/test_dependency_split.py keeps the code honest about that.
 #
 # Migrations run from the API image as a one-off, with

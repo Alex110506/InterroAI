@@ -84,7 +84,7 @@ Respond strictly with JSON: {"action": "answer"} or {"action": "implement"}
 #: How much prior conversation to carry, in characters, newest first. Context
 #: is what makes "sure" mean something; an unbounded transcript is what makes
 #: the twentieth request cost twenty times the first. This bounds the trade.
-_MAX_HISTORY_CHARS = 12_000
+_MAX_HISTORY_CHARS = 20_000
 
 
 def trim_history(history: list[dict] | None) -> list[dict]:
@@ -154,8 +154,7 @@ async def classify_intent(
     """
     2-way intent classifier. Returns: 'answer' | 'implement'.
 
-    *history* is the conversation so far. Without it a reply like "sure" has no
-    meaning to classify, and the router guesses.
+    *history* is the conversation so far.
 
     Only *unusable model output* falls back to 'implement'. A missing API key or
     an unreachable provider propagates: those are the user's real problem, and

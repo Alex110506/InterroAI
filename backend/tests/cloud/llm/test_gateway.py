@@ -1,16 +1,17 @@
 """
-The default ModelGateway: straight to OpenAI, through `core.models.llm`'s policy.
+The Cloud API's ModelGateway: straight to OpenAI, through `cloud.llm.openai_client`.
 
-Retries and timeouts themselves are tested in `test_llm.py`. What is left here
-is that the gateway routes through that policy rather than around it.
+Retries and timeouts themselves are tested in `test_openai_client.py`. What is
+left here is that the gateway routes through that policy rather than around it.
 """
 from __future__ import annotations
 
 import pytest
 
-import core.models.gateway as gateway_module
+import cloud.llm.gateway as gateway_module
+from cloud.llm.gateway import OpenAIGateway
 from core.errors import MissingAPIKeyError
-from core.models.gateway import FAST_TIMEOUT, LONG_TIMEOUT, OpenAIGateway
+from core.models.gateway import FAST_TIMEOUT, LONG_TIMEOUT
 
 
 @pytest.fixture

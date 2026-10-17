@@ -10,8 +10,8 @@ import pytest
 from port_contracts.upload_store import UploadStoreContract
 
 from cloud.adapters.blob_uploads import BlobUploadStore
+from cloud.indexing.ports import UnusableUploadError, UploadNotFoundError
 from contracts.indexing import ChunkUpload
-from core.index.ports import UnusableUploadError, UploadNotFoundError
 
 pytestmark = pytest.mark.integration
 

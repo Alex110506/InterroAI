@@ -21,8 +21,9 @@ from openai import (
 )
 from tenacity import wait_none
 
-import core.models.llm as llm
+import cloud.llm.openai_client as llm
 from core.errors import MissingAPIKeyError
+from core.models.gateway import FAST_TIMEOUT, LONG_TIMEOUT
 
 REQUEST = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
 
@@ -43,25 +44,25 @@ def test_no_configured_key_raises_a_typed_error():
     """A cloud process started without the platform key — expected, not a defect."""
     llm.use_api_key(None)
     with pytest.raises(MissingAPIKeyError):
-        llm.get_client(llm.FAST_TIMEOUT)
+        llm.get_client(FAST_TIMEOUT)
 
 
 def test_an_empty_key_is_treated_as_missing():
     llm.use_api_key("")
     with pytest.raises(MissingAPIKeyError):
-        llm.get_client(llm.FAST_TIMEOUT)
+        llm.get_client(FAST_TIMEOUT)
 
 
 def test_the_configured_key_is_the_one_used():
     llm.use_api_key("sk-platform")
-    assert llm.get_client(llm.FAST_TIMEOUT).api_key == "sk-platform"
+    assert llm.get_client(FAST_TIMEOUT).api_key == "sk-platform"
 
 
 def test_clearing_the_key_leaves_none():
     llm.use_api_key("sk-platform")
     llm.use_api_key(None)
     with pytest.raises(MissingAPIKeyError):
-        llm.get_client(llm.FAST_TIMEOUT)
+        llm.get_client(FAST_TIMEOUT)
 
 
 def test_sdk_retries_are_disabled(with_api_key):
@@ -69,25 +70,25 @@ def test_sdk_retries_are_disabled(with_api_key):
     tenacity owns the retry policy. Leaving the SDK's default of 2 would
     compound to 4x2 = 8 real requests with two different backoff curves.
     """
-    assert llm.get_client(llm.FAST_TIMEOUT).max_retries == 0
+    assert llm.get_client(FAST_TIMEOUT).max_retries == 0
 
 
 def test_requested_timeout_is_applied(with_api_key):
-    assert llm.get_client(llm.LONG_TIMEOUT).timeout == llm.LONG_TIMEOUT
+    assert llm.get_client(LONG_TIMEOUT).timeout == LONG_TIMEOUT
 
 
 def test_clients_are_cached_per_timeout(with_api_key):
     """Each client owns an httpx pool; rebuilding per call leaked one each time."""
-    first = llm.get_client(llm.FAST_TIMEOUT)
-    assert llm.get_client(llm.FAST_TIMEOUT) is first
-    assert llm.get_client(llm.LONG_TIMEOUT) is not first
+    first = llm.get_client(FAST_TIMEOUT)
+    assert llm.get_client(FAST_TIMEOUT) is first
+    assert llm.get_client(LONG_TIMEOUT) is not first
 
 
 def test_rotating_the_key_yields_a_fresh_client():
     llm.use_api_key("sk-old")
-    old = llm.get_client(llm.FAST_TIMEOUT)
+    old = llm.get_client(FAST_TIMEOUT)
     llm.use_api_key("sk-new")
-    assert llm.get_client(llm.FAST_TIMEOUT) is not old
+    assert llm.get_client(FAST_TIMEOUT) is not old
 
 
 # ── Timeout policy ───────────────────────────────────────────────────────────
@@ -95,13 +96,13 @@ def test_rotating_the_key_yields_a_fresh_client():
 
 def test_every_timeout_is_far_below_the_sdk_default():
     """The SDK default is 600s — long enough to pin a WebSocket for 10 minutes."""
-    for timeout in (llm.FAST_TIMEOUT, llm.EMBED_TIMEOUT, llm.LONG_TIMEOUT):
+    for timeout in (FAST_TIMEOUT, llm.EMBED_TIMEOUT, LONG_TIMEOUT):
         assert timeout.read < 600
         assert timeout.connect == 5.0
 
 
 def test_timeouts_are_ordered_by_expected_work():
-    assert llm.FAST_TIMEOUT.read < llm.EMBED_TIMEOUT.read < llm.LONG_TIMEOUT.read
+    assert FAST_TIMEOUT.read < llm.EMBED_TIMEOUT.read < LONG_TIMEOUT.read
 
 
 # ── Which failures requalify for a retry ─────────────────────────────────────
@@ -219,6 +220,6 @@ async def test_embed_batch_retries_transient_failures(fake_client):
 async def test_retry_warns_before_sleeping(fake_client, caplog):
     """A silent retry hides a degrading provider; each one must be logged."""
     client = fake_client([APIConnectionError(request=REQUEST), "ok"])
-    with caplog.at_level("WARNING", logger="core.models.llm"):
+    with caplog.at_level("WARNING", logger="cloud.llm.openai_client"):
         await _instant(llm.chat_completion)(client, model="m")
     assert any("Retrying" in r.message for r in caplog.records)

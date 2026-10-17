@@ -9,12 +9,12 @@ reasons:
     of 60 re-embeds none of the first 58 when it runs again. (Without a cache —
     the local build with no Redis running — a failed job pays again.) The index
     itself is written once, atomically, after the last batch: see
-    `core/index/indexer.py`.
+    `cloud/indexing/indexer.py`.
   * **Progress needs no callback.** The caller is itself a generator; when this
     one yields, progress can simply be re-yielded.
 
 One bad chunk does not sink the run. A batch that fails with an *item* error
-(see `core.models.llm.ITEM_ERRORS` — a chunk over the token limit, say) is
+(see `cloud.llm.openai_client.ITEM_ERRORS` — a chunk over the token limit, say) is
 bisected to find the offending items, which are reported as failures and
 skipped while the rest of the batch is kept. Anything else — the provider being
 down, a bad key — is environmental and propagates, because skipping items one at
@@ -29,8 +29,8 @@ import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 
-from core.index.ports import EmbeddingCache, content_digest
-from core.models.llm import EMBED_TIMEOUT, ITEM_ERRORS, embed_batch, get_client
+from cloud.indexing.ports import EmbeddingCache, content_digest
+from cloud.llm.openai_client import EMBED_TIMEOUT, ITEM_ERRORS, embed_batch, get_client
 
 logger = logging.getLogger(__name__)
 

@@ -21,8 +21,8 @@ from sqlalchemy.dialects.postgresql import insert
 
 from cloud.db.models import Chunk
 from cloud.db.session import ScopeFactory
+from cloud.indexing.ports import IndexedChunk, StoredFile, chunk_id, split_chunk_id
 from contracts.indexing import SearchHit
-from core.index.ports import IndexedChunk, StoredFile, chunk_id, split_chunk_id
 
 #: Rows per statement: well inside Postgres's 65,535 bind-parameter limit.
 _BATCH = 500

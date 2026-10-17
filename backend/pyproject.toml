@@ -71,6 +71,8 @@ packages = [
     "cloud.api",
     "cloud.auth",
     "cloud.db",
+    "cloud.indexing",
+    "cloud.llm",
     "cloud.worker",
     "contracts",
     "core",

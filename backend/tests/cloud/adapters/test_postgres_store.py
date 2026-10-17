@@ -13,7 +13,7 @@ from sqlalchemy.exc import DBAPIError
 from cloud.adapters.postgres_store import PostgresChunkStore
 from cloud.db.models import EMBEDDING_DIMENSIONS
 from cloud.db.session import service_scope, user_scope
-from core.index.ports import IndexedChunk
+from cloud.indexing.ports import IndexedChunk
 
 pytestmark = pytest.mark.integration
 

@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import pytest
 
-from core.index.ports import IndexedChunk, chunk_id
+from cloud.indexing.ports import IndexedChunk, chunk_id
 
 
 def unit_vector(dimensions: int, axis: int) -> list[float]:

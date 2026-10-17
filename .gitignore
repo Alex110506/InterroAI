@@ -21,11 +21,6 @@ htmlcov/
 .pytest_cache/
 .ruff_cache/
 
-# Local Vector Store (ChromaDB)
-# If ChromaDB stores data locally inside the project, ignore it
-chroma_db/
-.chroma/
-
 # Environment
 .env
 .env.local

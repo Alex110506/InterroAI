@@ -14,7 +14,7 @@ Phase 2 is split down the middle, along the line the cloud build will cut it:
   * **Here, on the machine that has the files:** walk the project, hash every
     file, ask the `SemanticIndex` which of them changed (step A), and chunk only
     those (step B).
-  * **In the index's worker (`core/index/indexer.py`):** embed the chunks, store them,
+  * **In the index's worker (`cloud/indexing/indexer.py`):** embed the chunks, store them,
     and prune whatever they replaced (steps C and D).
 
 The halves meet only through `contracts.indexing` — a `SyncRequest`, a

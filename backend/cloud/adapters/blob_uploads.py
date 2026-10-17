@@ -21,8 +21,8 @@ from azure.storage.blob import BlobSasPermissions, ContentSettings, generate_blo
 from azure.storage.blob.aio import BlobServiceClient, ContainerClient
 from pydantic import ValidationError
 
+from cloud.indexing.ports import UnusableUploadError, UploadNotFoundError
 from contracts.indexing import ChunkUpload
-from core.index.ports import UnusableUploadError, UploadNotFoundError
 
 
 class BlobUploadStore:

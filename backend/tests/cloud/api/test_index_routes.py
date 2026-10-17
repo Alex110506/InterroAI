@@ -31,8 +31,8 @@ from cloud.db.models import EMBEDDING_DIMENSIONS
 from cloud.db.projects import ProjectRepository
 from cloud.db.session import anonymous_scope, service_scope
 from cloud.db.usage import PostgresUsageMeter, Quota
+from cloud.indexing.ports import IndexedChunk
 from contracts.indexing import Chunk, ChunkUpload, IndexEvent, IndexJobMessage
-from core.index.ports import IndexedChunk
 
 pytestmark = pytest.mark.integration
 

@@ -4,8 +4,8 @@ once, for both the local index and the cloud sync endpoint.
 """
 from __future__ import annotations
 
+from cloud.indexing.manifest_diff import diff_manifest
 from contracts.indexing import FileState
-from core.index.manifest_diff import diff_manifest
 
 
 def _files(*pairs) -> list[FileState]:

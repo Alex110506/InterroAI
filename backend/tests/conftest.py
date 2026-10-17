@@ -7,8 +7,9 @@ before every application import: `config.py` instantiates `_AppConfig()` at
 the developer's real config untouched by a test run.
 
 Model calls are faked at the `ModelGateway` port (`FakeGateway`, handed to the
-code under test), not by patching `core.models.llm`. Only the tests of `core.models.llm`
-itself and of the embedding client still stub the OpenAI SDK directly.
+code under test), not by patching the OpenAI client. Only the tests of
+`cloud.llm.openai_client` itself and of the embedding client still stub the
+OpenAI SDK directly.
 """
 from __future__ import annotations
 
@@ -32,9 +33,9 @@ from types import SimpleNamespace  # noqa: E402
 import pytest  # noqa: E402
 from redis.exceptions import RedisError  # noqa: E402
 
+import cloud.llm.openai_client as llm_module  # noqa: E402
 import core.local.cache as cache_module  # noqa: E402
 import core.local.security as security  # noqa: E402
-import core.models.llm as llm_module  # noqa: E402
 
 # ── Fake OpenAI plumbing ─────────────────────────────────────────────────────
 

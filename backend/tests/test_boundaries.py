@@ -6,13 +6,14 @@ imports (parsed with `ast`, never executed):
 
   * the runtime — `agents/`, `api/`, `core/workspace/` — reaches models and the
     index only through their ports, and never names a concrete implementation;
-  * `core/index/` — the indexing code the cloud runs — never reaches into the
-    workspace, and its worker half never touches the filesystem at all;
+  * `cloud/indexing/` — the indexing code the cloud runs — is written against
+    its ports and names no adapter, and its worker half never touches the
+    filesystem at all;
   * `core/models/` and `core/local/` are plumbing that no feature leaks into;
   * `contracts/` depends on nothing else in the backend;
   * the runtime and the cloud side never import each other;
-  * only `cloud/api/` speaks HTTP: sign-in, the database, the adapters and the
-    worker import neither it nor the web framework.
+  * only `cloud/api/` speaks HTTP: nothing else in `cloud/` imports it or the
+    web framework.
 
 They are tests rather than code-review conventions, so breaking one fails CI
 instead of waiting for a reviewer to notice.
@@ -58,17 +59,10 @@ def _violations(relative: str, forbidden: tuple[str, ...]) -> list[str]:
     )
 
 
-#: What the ports exist to hide — the model SDK, the embedding client, the
-#: vector store and the machinery behind the index — plus the concrete
-#: implementations, which only `core/providers.py` may name.
-_BEHIND_THE_PORTS = (
-    "openai",
-    "core.models.llm",
-    "core.models.gateway.OpenAIGateway",
-    "core.index.embeddings",
-    "core.index.indexer",
-    "core.remote",
-)
+#: What the ports exist to hide on this side: the model SDK, and the cloud
+#: clients that implement the ports, which only `core/providers.py` may name.
+#: Everything further behind them is in `cloud/`, which the runtime never imports.
+_BEHIND_THE_PORTS = ("openai", "core.remote")
 
 _FEATURES = ("core.workspace", "core.index", "agents", "api")
 
@@ -78,15 +72,15 @@ def test_the_runtime_reaches_models_and_the_index_only_through_ports(module):
     assert _violations(module, _BEHIND_THE_PORTS) == []
 
 
-@pytest.mark.parametrize("module", _modules("core/index"))
-def test_the_index_service_never_reaches_into_the_workspace(module):
-    """It runs in the cloud, where there is no workspace to reach into."""
-    assert _violations(module, ("core.workspace", "agents", "api")) == []
+@pytest.mark.parametrize("module", _modules("cloud/indexing"))
+def test_the_indexing_code_names_no_adapter(module):
+    """It is written against `cloud/indexing/ports.py`; its callers hand the adapters in."""
+    assert _violations(module, ("cloud.adapters", "cloud.db", "cloud.api", "cloud.worker")) == []
 
 
 def test_the_worker_never_touches_the_filesystem():
     """It has to run on a machine that has never seen the repository."""
-    assert _violations("core/index/indexer.py", ("os", "pathlib")) == []
+    assert _violations("cloud/indexing/indexer.py", ("os", "pathlib")) == []
 
 
 @pytest.mark.parametrize("module", _modules("core/models", "core/local"))
@@ -97,15 +91,7 @@ def test_plumbing_never_depends_on_a_feature(module):
 @pytest.mark.parametrize("module", _modules("core/remote"))
 def test_the_cloud_clients_stay_clients(module):
     """They implement the ports: features call them, never the reverse."""
-    forbidden = (
-        "core.workspace",
-        "agents",
-        "api",
-        "core.models.llm",
-        "core.index.embeddings",
-        "core.index.indexer",
-    )
-    assert _violations(module, forbidden) == []
+    assert _violations(module, ("core.workspace", "agents", "api")) == []
 
 
 @pytest.mark.parametrize("module", _modules("contracts"))
@@ -127,7 +113,10 @@ def test_the_runtime_never_imports_the_cloud_side(module):
 
 @pytest.mark.parametrize(
     "module",
-    _modules("cloud", "cloud/adapters", "cloud/api", "cloud/auth", "cloud/db", "cloud/worker"),
+    _modules(
+        "cloud", "cloud/adapters", "cloud/api", "cloud/auth", "cloud/db",
+        "cloud/indexing", "cloud/llm", "cloud/worker",
+    ),
 )
 def test_the_cloud_side_never_imports_the_runtime(module):
     """There is no workspace, agent or local transport on a server to reach for."""
@@ -135,10 +124,13 @@ def test_the_cloud_side_never_imports_the_runtime(module):
 
 
 @pytest.mark.parametrize(
-    "module", _modules("cloud/adapters", "cloud/auth", "cloud/db", "cloud/worker")
+    "module",
+    _modules(
+        "cloud/adapters", "cloud/auth", "cloud/db", "cloud/indexing", "cloud/llm", "cloud/worker"
+    ),
 )
 def test_only_the_cloud_api_speaks_http(module):
-    """Sign-in, the database, the adapters and the worker serve the API, never the reverse."""
+    """Everything else in `cloud/` serves the API, never the reverse."""
     assert _violations(module, ("fastapi", "starlette", "cloud.api")) == []
 
 
@@ -150,6 +142,7 @@ def test_the_guard_can_see_imports_at_all():
     folders = (
         "agents", "api", "contracts", "core/workspace",
         "core/index", "core/models", "core/local",
-        "cloud/adapters", "cloud/api", "cloud/auth", "cloud/db", "cloud/worker",
+        "cloud/adapters", "cloud/api", "cloud/auth", "cloud/db",
+        "cloud/indexing", "cloud/llm", "cloud/worker",
     )
     assert all(_modules(folder) for folder in folders)

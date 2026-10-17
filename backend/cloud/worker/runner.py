@@ -2,7 +2,7 @@
 The Embed Worker's loop: one queue message at a time, from delivery to settlement.
 
 For each delivery it looks the job up, fetches the upload the message points at,
-runs `core.index.indexer.run_job` with the cloud store and cache, records every
+runs `cloud.indexing.indexer.run_job` with the cloud store and cache, records every
 event on the job row, and settles the message. How it settles is the point:
 
   * **The job ran to an end** — successfully or with an `error` event — so the
@@ -27,9 +27,8 @@ import logging
 from typing import Protocol
 
 from cloud import observability
-from contracts.indexing import IndexEvent
-from core.index.indexer import run_job
-from core.index.ports import (
+from cloud.indexing.indexer import run_job
+from cloud.indexing.ports import (
     ChunkStore,
     Delivery,
     EmbeddingCache,
@@ -38,6 +37,7 @@ from core.index.ports import (
     UploadNotFoundError,
     UploadStore,
 )
+from contracts.indexing import IndexEvent
 
 logger = logging.getLogger(__name__)
 

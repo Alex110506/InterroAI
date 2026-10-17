@@ -10,9 +10,9 @@ import httpx
 import pytest
 from openai import APIConnectionError, BadRequestError
 
-import core.index.embeddings as embeddings
+import cloud.indexing.embeddings as embeddings
+from cloud.indexing.embeddings import _BATCH_SIZE, _MODEL, EmbeddedBatch, embed_batches, embed_texts
 from core.errors import MissingAPIKeyError
-from core.index.embeddings import _BATCH_SIZE, _MODEL, EmbeddedBatch, embed_batches, embed_texts
 
 
 def _embedding_response(count: int, dim: int = 4):
@@ -114,7 +114,7 @@ async def test_uses_the_embedding_timeout(monkeypatch):
 
 async def test_provider_errors_propagate(monkeypatch):
     """
-    After `core.models.llm` exhausts its retries the failure is real; indexing
+    After `cloud.llm.openai_client` exhausts its retries the failure is real; indexing
     should surface it rather than persist a half-embedded index.
     """
     monkeypatch.setattr(embeddings, "get_client", lambda timeout: object())
@@ -176,7 +176,7 @@ async def test_a_cache_that_raises_is_treated_as_a_miss(recording, caplog):
         async def put(self, model, vectors):
             raise RuntimeError("cache down")
 
-    with caplog.at_level("WARNING", logger="core.index.embeddings"):
+    with caplog.at_level("WARNING", logger="cloud.indexing.embeddings"):
         assert len(await embed_texts(["a", "b"], cache=ExplodingCache())) == 2
     assert any("cache" in record.message for record in caplog.records)
 

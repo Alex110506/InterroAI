@@ -32,6 +32,7 @@ from cloud.api.services import Services
 from cloud.auth.tokens import AccessClaims
 from cloud.db.jobs import ActiveJobExistsError, JobRepository
 from cloud.db.session import ScopeFactory, user_scope
+from cloud.indexing.manifest_diff import diff_manifest
 from contracts.indexing import (
     IndexJobMessage,
     SearchHit,
@@ -39,7 +40,6 @@ from contracts.indexing import (
     SyncRequest,
     SyncResult,
 )
-from core.index.manifest_diff import diff_manifest
 
 logger = logging.getLogger(__name__)
 

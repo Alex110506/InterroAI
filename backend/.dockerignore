@@ -15,5 +15,4 @@ api
 main.py
 config.py
 requirements.lock
-chroma_db
 .env

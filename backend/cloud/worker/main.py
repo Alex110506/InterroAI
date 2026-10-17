@@ -20,17 +20,17 @@ from cloud.adapters.postgres_store import PostgresChunkStore
 from cloud.adapters.service_bus import ServiceBusJobQueue
 from cloud.db.jobs import JobRepository
 from cloud.db.session import create_engine, create_session_factory, service_scope
+from cloud.llm import openai_client
 from cloud.observability import configure_logging
 from cloud.settings import WorkerSettings
 from cloud.worker.runner import JobRunner
-from core.models import llm
 
 logger = logging.getLogger("cloud.worker")
 
 
 async def run_worker(settings: WorkerSettings) -> None:
     # The worker has no keychain; it embeds with the platform key.
-    llm.use_api_key(settings.openai_api_key.get_secret_value())
+    openai_client.use_api_key(settings.openai_api_key.get_secret_value())
 
     engine = create_engine(
         settings.database_url,

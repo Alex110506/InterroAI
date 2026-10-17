@@ -1,12 +1,11 @@
 """
 ModelGateway — the one door every chat-model call goes through.
 
-`OpenAIGateway` opens straight onto OpenAI with the platform key its own
-process configured (`core.models.llm.use_api_key`), and only the Cloud API
-builds one. The desktop runtime always gets the gateway that calls that API
-instead, which holds the key and enforces per-user quotas; nothing in `agents/`
-can tell the difference, which is why the agents take a `ModelGateway` and
-never import `core.models.llm` themselves.
+The desktop runtime's gateway (`core/remote/gateway.py`) calls the Cloud API,
+which holds the platform key and enforces per-user quotas. The Cloud API's own
+(`cloud/llm/gateway.py`, `OpenAIGateway`) opens straight onto OpenAI. Nothing in
+`agents/` can tell the difference, which is why the agents take a `ModelGateway`
+and never import an OpenAI client themselves.
 
 Requests and responses are OpenAI's own chat-completion shapes, on purpose. A
 schema of our own would mean translating tool calls, streaming deltas and
@@ -26,13 +25,21 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 import httpx
 
-from core.models.llm import FAST_TIMEOUT, LONG_TIMEOUT, chat_completion, chat_stream, get_client
-
 if TYPE_CHECKING:
     from openai.types.chat import ChatCompletion, ChatCompletionChunk
 
-# Re-exported so callers pick a timeout class without reaching into `core.models.llm`.
-__all__ = ["FAST_TIMEOUT", "LONG_TIMEOUT", "ModelGateway", "OpenAIGateway"]
+# ── Timeouts ─────────────────────────────────────────────────────────────────
+# Callers pick one per call, and both sides of the port read them: the agents
+# pass one in, and the Cloud API waits the same budget on OpenAI. `connect` is
+# short everywhere: failing to reach the API is immediately obvious, so there is
+# no reason to wait on it. The read budget is what varies. Embedding batches
+# have their own, beside the embedding client (`cloud/llm/openai_client.py`).
+
+#: Intent classification — small prompts, must feel instant.
+FAST_TIMEOUT = httpx.Timeout(30.0, connect=5.0)
+
+#: Coder planning and tool rounds against a reasoning model.
+LONG_TIMEOUT = httpx.Timeout(180.0, connect=5.0)
 
 
 class ModelGateway(Protocol):
@@ -53,13 +60,3 @@ class ModelGateway(Protocol):
         a retry would replay it.
         """
         ...
-
-
-class OpenAIGateway:
-    """Direct to OpenAI, with the platform key this process configured."""
-
-    async def chat(self, *, timeout: httpx.Timeout = LONG_TIMEOUT, **request: Any):
-        return await chat_completion(get_client(timeout), **request)
-
-    async def chat_stream(self, *, timeout: httpx.Timeout = LONG_TIMEOUT, **request: Any):
-        return await chat_stream(get_client(timeout), **request)

@@ -18,7 +18,7 @@ import httpx
 import pytest
 from fakes.queue import InMemoryJobQueue
 
-import core.index.indexer as indexer
+import cloud.indexing.indexer as indexer
 from cloud.adapters.postgres_cache import PostgresEmbeddingCache
 from cloud.adapters.postgres_store import PostgresChunkStore
 from cloud.api.main import create_app
@@ -30,9 +30,9 @@ from cloud.db.models import EMBEDDING_DIMENSIONS
 from cloud.db.projects import ProjectRepository
 from cloud.db.session import anonymous_scope, service_scope
 from cloud.db.usage import PostgresUsageMeter, Quota
+from cloud.indexing.embeddings import EmbeddedBatch
 from cloud.worker.runner import JobRunner
 from contracts.indexing import SearchRequest
-from core.index.embeddings import EmbeddedBatch
 from core.remote.semantic_index import ProjectRegistry, RemoteSemanticIndex
 from core.remote.session import CloudSession
 from core.workspace.project_index import embed_project

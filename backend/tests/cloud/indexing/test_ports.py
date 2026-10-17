@@ -1,7 +1,7 @@
-"""The small pieces of `core/index/ports.py` every adapter relies on."""
+"""The small pieces of `cloud/indexing/ports.py` every adapter relies on."""
 from __future__ import annotations
 
-from core.index.ports import IndexedChunk, chunk_id, content_digest, split_chunk_id
+from cloud.indexing.ports import IndexedChunk, chunk_id, content_digest, split_chunk_id
 
 
 def test_a_chunk_id_is_its_file_and_start_line():

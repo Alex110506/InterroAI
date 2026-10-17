@@ -6,7 +6,7 @@ one `ChunkUpload` — chunks the runtime already cut and hashed — and knows
 nothing about where they came from: it opens no project files and reads no
 `.gitignore`. That is what lets it run on a machine that has never seen the
 repository, and `tests/test_boundaries.py` keeps it that way. The store and the
-cache are handed in as ports (`core/index/ports.py`), so this code names no
+cache are handed in as ports (`cloud/indexing/ports.py`), so this code names no
 implementation: in Azure they are pgvector and a Postgres table.
 
 It yields the C (embedding) and D (writing) steps and the final summary. A
@@ -34,10 +34,10 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncIterator
 
+from cloud.indexing.embeddings import embed_batches
+from cloud.indexing.ports import ChunkStore, EmbeddingCache, IndexedChunk, StoredFile, chunk_id
 from contracts.indexing import Chunk, ChunkUpload, IndexEvent
 from core.errors import InterroAIError
-from core.index.embeddings import embed_batches
-from core.index.ports import ChunkStore, EmbeddingCache, IndexedChunk, StoredFile, chunk_id
 
 logger = logging.getLogger(__name__)
 

@@ -28,11 +28,12 @@ from cloud.db.notifications import JobNotifications, asyncpg_dsn
 from cloud.db.projects import ProjectRepository
 from cloud.db.session import anonymous_scope, create_engine, create_session_factory
 from cloud.db.usage import PostgresUsageMeter, Quota, UsageMeter
+from cloud.indexing.embeddings import embed_texts
+from cloud.indexing.ports import JobQueue
+from cloud.llm import openai_client
+from cloud.llm.gateway import OpenAIGateway
 from cloud.settings import ApiSettings
-from core.index.embeddings import embed_texts
-from core.index.ports import JobQueue
-from core.models import llm
-from core.models.gateway import ModelGateway, OpenAIGateway
+from core.models.gateway import ModelGateway
 
 CALLBACK_PATH = "/auth/github/callback"
 
@@ -105,7 +106,7 @@ class Services:
 def build_services(settings: ApiSettings) -> Services:
     """Wire the production adapters. Nothing connects until the first request."""
     # The API embeds search queries and proxies chat, both on the platform key.
-    llm.use_api_key(settings.openai_api_key.get_secret_value())
+    openai_client.use_api_key(settings.openai_api_key.get_secret_value())
 
     engine = create_engine(
         settings.database_url,

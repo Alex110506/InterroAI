@@ -48,17 +48,12 @@ from core.errors import MissingAPIKeyError
 logger = logging.getLogger(__name__)
 
 # ── Timeouts ─────────────────────────────────────────────────────────────────
-# `connect` is short everywhere: failing to reach the API is immediately
-# obvious, so there is no reason to wait on it. The read budget is what varies.
-
-#: Intent classification — small prompts, must feel instant.
-FAST_TIMEOUT = httpx.Timeout(30.0, connect=5.0)
+# The chat timeouts live with the port both sides share
+# (`core.models.gateway.FAST_TIMEOUT` and `LONG_TIMEOUT`). Embedding is the
+# cloud's alone, so its budget lives here.
 
 #: Embedding batches — up to 100 inputs per request.
 EMBED_TIMEOUT = httpx.Timeout(60.0, connect=5.0)
-
-#: Coder planning and tool rounds against a reasoning model.
-LONG_TIMEOUT = httpx.Timeout(180.0, connect=5.0)
 
 # ── Retry policy ─────────────────────────────────────────────────────────────
 #: Failures that are worth retrying: the request never produced a usable answer
