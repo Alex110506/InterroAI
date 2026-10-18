@@ -1,14 +1,18 @@
 // Signing in to the InterroAI cloud: the browser half, run by the main process.
 //
-//   1. Make a PKCE verifier and its challenge, and a state value.
-//   2. Listen on a free port on 127.0.0.1 for the browser to come back.
-//   3. Open the Cloud API's /auth/github/start in the user's browser.
-//   4. The Cloud API sends the browser to GitHub and back, then here, to this
-//      listener, with a one-time login code.
-//   5. Hand the code and the verifier to the runtime (PUT /api/session), which
-//      redeems them and keeps the tokens. They never pass through this process.
+//   1. Ask the runtime where to sign in: the Auth0 tenant, this app's client id
+//      and the Cloud API's audience (GET /api/session, from the API's /auth/config).
+//   2. Make a PKCE verifier and its challenge, and a state value.
+//   3. Listen on 127.0.0.1 for the browser to come back, on the first free port
+//      of LOOPBACK_PORTS. Auth0 matches callback URLs exactly, port included, so
+//      each of these is registered there; a random port would be refused.
+//   4. Open Auth0's /authorize in the user's browser, sent straight on to GitHub.
+//   5. Auth0 sends the browser back here with an authorization code.
+//   6. Hand the code, the verifier and the redirect URI to the runtime
+//      (PUT /api/session), which redeems them at Auth0 and keeps the tokens.
+//      They never pass through this process.
 //
-// The verifier stays in this process until step 5, and step 5 goes only to the
+// The verifier stays in this process until step 6, and step 6 goes only to the
 // runtime this app started. A code intercepted on its way through the browser
 // is useless without it.
 
@@ -16,10 +20,14 @@ const crypto = require('node:crypto')
 const http = require('node:http')
 
 const TIMEOUT_MS = 5 * 60 * 1000
+// Each is registered in Auth0 as an allowed callback, http://127.0.0.1:<port>/callback.
+const LOOPBACK_PORTS = [47213, 47214, 47215]
+const SCOPES = 'openid profile offline_access'
 
 const REFUSALS = {
-  access_denied: 'This GitHub account is not allowed to use InterroAI, or sign-in was cancelled.',
+  access_denied: 'Sign-in was cancelled, or GitHub refused it.',
   server_error: 'GitHub sign-in failed. Try again in a moment.',
+  temporarily_unavailable: 'Sign-in is unavailable right now. Try again in a moment.',
 }
 
 class SignInError extends Error {
@@ -47,12 +55,26 @@ function page(title, message) {
 <main><h1>${escapeHtml(title)}</h1><p>${escapeHtml(message)}</p></main>`
 }
 
-function listen() {
+function listenOn(port) {
   return new Promise((resolve, reject) => {
     const server = http.createServer()
     server.once('error', reject)
-    server.listen(0, '127.0.0.1', () => resolve(server))
+    server.listen(port, '127.0.0.1', () => resolve(server))
   })
+}
+
+async function listen(ports) {
+  for (const port of ports) {
+    try {
+      return await listenOn(port)
+    } catch (err) {
+      if (err.code !== 'EADDRINUSE') throw err
+    }
+  }
+  throw new SignInError(
+    'port_in_use',
+    `InterroAI could not wait for the sign-in to come back: ports ${ports.join(', ')} are all in use.`,
+  )
 }
 
 // Resolves with the login code when the browser comes back with this sign-in's
@@ -105,16 +127,33 @@ function waitForCallback(server, { state, timeoutMs, signal }) {
   })
 }
 
-async function signIn({ runtime, openExternal, fetchImpl = fetch, timeoutMs = TIMEOUT_MS, signal } = {}) {
+async function signIn({
+  runtime,
+  openExternal,
+  fetchImpl = fetch,
+  timeoutMs = TIMEOUT_MS,
+  signal,
+  ports = LOOPBACK_PORTS,
+} = {}) {
   const headers = { 'Content-Type': 'application/json', 'X-Interroai-Token': runtime.token }
   const session = await (await fetchImpl(`${runtime.baseUrl}/api/session`, { headers })).json()
+  if (!session.auth0) {
+    throw new SignInError('cloud_unavailable', 'The InterroAI cloud cannot be reached. Check your connection and try again.')
+  }
 
   const { verifier, challenge } = pkcePair()
   const state = base64url(crypto.randomBytes(16))
-  const server = await listen()
+  const server = await listen(ports)
   try {
+    const redirectUri = `http://127.0.0.1:${server.address().port}/callback`
     const query = new URLSearchParams({
-      redirect_uri: `http://127.0.0.1:${server.address().port}/callback`,
+      response_type: 'code',
+      client_id: session.auth0.client_id,
+      audience: session.auth0.audience,
+      scope: SCOPES,
+      // Straight to GitHub, past Auth0's own login page: it is the only way in.
+      connection: 'github',
+      redirect_uri: redirectUri,
       code_challenge: challenge,
       code_challenge_method: 'S256',
       state,
@@ -123,13 +162,13 @@ async function signIn({ runtime, openExternal, fetchImpl = fetch, timeoutMs = TI
     // Handled here too, so a cancel arriving while the browser opens is not an
     // unhandled rejection; the await below still sees it.
     callback.catch(() => {})
-    await openExternal(`${session.api_url.replace(/\/+$/, '')}/auth/github/start?${query}`)
+    await openExternal(`https://${session.auth0.domain}/authorize?${query}`)
     const { code, reply } = await callback
 
     const res = await fetchImpl(`${runtime.baseUrl}/api/session`, {
       method: 'PUT',
       headers,
-      body: JSON.stringify({ code, code_verifier: verifier }),
+      body: JSON.stringify({ code, code_verifier: verifier, redirect_uri: redirectUri }),
     })
     const body = await res.json().catch(() => ({}))
     if (!res.ok) {
@@ -145,4 +184,4 @@ async function signIn({ runtime, openExternal, fetchImpl = fetch, timeoutMs = TI
   }
 }
 
-module.exports = { SignInError, pkcePair, signIn }
+module.exports = { LOOPBACK_PORTS, SignInError, pkcePair, signIn }
