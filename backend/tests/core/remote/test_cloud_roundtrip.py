@@ -28,8 +28,8 @@ from cloud.auth.tokens import TokenSigner
 from cloud.db.jobs import JobRepository
 from cloud.db.models import EMBEDDING_DIMENSIONS
 from cloud.db.session import anonymous_scope, service_scope
-from cloud.db.usage import PostgresUsageMeter, Quota
 from cloud.indexing.embeddings import EmbeddedBatch
+from cloud.llm.usage import PostgresUsageMeter, Quota
 from cloud.projects.repository import ProjectRepository
 from cloud.worker.runner import JobRunner
 from contracts.indexing import SearchRequest

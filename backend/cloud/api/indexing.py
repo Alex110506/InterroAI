@@ -25,9 +25,15 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict
 
 from cloud.adapters.postgres_store import PostgresChunkStore
-from cloud.api.deps import CurrentUser, ServicesDep, api_error, charge_request, rate_limit
+from cloud.api.deps import (
+    CurrentUser,
+    ServicesDep,
+    api_error,
+    charge_request,
+    rate_limit,
+    upstream_errors,
+)
 from cloud.api.job_events import job_event_stream
-from cloud.api.llm_gateway import upstream_errors
 from cloud.api.services import Services
 from cloud.auth.tokens import AccessClaims
 from cloud.db.jobs import ActiveJobExistsError, JobRepository

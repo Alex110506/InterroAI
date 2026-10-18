@@ -7,7 +7,7 @@ import pytest
 from port_contracts.usage import DAY, UsageMeterContract
 
 from cloud.db.session import anonymous_scope
-from cloud.db.usage import PostgresUsageMeter, Quota
+from cloud.llm.usage import PostgresUsageMeter, Quota
 
 pytestmark = pytest.mark.integration
 

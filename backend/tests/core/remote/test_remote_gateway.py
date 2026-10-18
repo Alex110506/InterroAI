@@ -20,7 +20,7 @@ from agents.session import ChatSession
 from cloud.api.main import create_app
 from cloud.api.services import Limits, Services
 from cloud.auth.tokens import TokenSigner
-from cloud.db.usage import Quota
+from cloud.llm.usage import Quota
 from core.errors import CloudError, QuotaExceededError, UpstreamLLMError
 from core.models.gateway import LONG_TIMEOUT
 from core.remote.gateway import RemoteModelGateway, cloud_timeout

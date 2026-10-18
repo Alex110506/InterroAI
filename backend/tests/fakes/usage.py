@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from cloud.db.usage import Quota, UsageTotals
+from cloud.llm.usage import Quota, UsageTotals
 
 
 class InMemoryUsageMeter:

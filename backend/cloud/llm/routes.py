@@ -18,10 +18,9 @@ What it does enforce:
 """
 from __future__ import annotations
 
-import contextlib
 import json
 import logging
-from collections.abc import AsyncIterable, AsyncIterator, Iterator
+from collections.abc import AsyncIterable, AsyncIterator
 from datetime import UTC, datetime
 from typing import Annotated, Any
 
@@ -30,10 +29,9 @@ import openai
 from fastapi import APIRouter, Body, Depends, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from cloud.api.deps import ServicesDep, api_error, charge_request, rate_limit
+from cloud.api.deps import ServicesDep, api_error, charge_request, rate_limit, upstream_errors
 from cloud.api.services import Services
 from cloud.auth.tokens import AccessClaims
-from core.errors import MissingAPIKeyError
 from core.models.gateway import LONG_TIMEOUT
 
 logger = logging.getLogger(__name__)
@@ -98,38 +96,6 @@ async def chat(
     return StreamingResponse(
         _relay(chunks, services, user), media_type="text/event-stream", headers=_STREAM_HEADERS
     )
-
-
-@contextlib.contextmanager
-def upstream_errors() -> Iterator[None]:
-    """OpenAI's failures, as answers the runtime can act on."""
-    try:
-        yield
-    except MissingAPIKeyError:
-        logger.error("The platform OpenAI key is not configured")
-        raise api_error(503, "llm_unavailable", "The model service is not configured.") from None
-    except (openai.BadRequestError, openai.UnprocessableEntityError) as exc:
-        raise api_error(400, "invalid_request", exc.message) from None
-    except (openai.AuthenticationError, openai.PermissionDeniedError):
-        logger.error("OpenAI refused the platform key")
-        raise api_error(503, "llm_unavailable", "The model service is unavailable.") from None
-    except openai.APITimeoutError:
-        # Deliberately not retried (cloud.llm.openai_client), and Container Apps
-        # cancels the request at 240 seconds anyway. Saying so plainly matters:
-        # the runtime would otherwise report the whole cloud as unreachable.
-        raise api_error(
-            504,
-            "model_timeout",
-            "The model took too long to answer. Try a smaller task, or a faster model.",
-        ) from None
-    except (openai.RateLimitError, openai.APIConnectionError):
-        # Already retried with backoff in cloud.llm.openai_client.
-        raise api_error(
-            503, "llm_unavailable", "The model service is busy. Try again shortly."
-        ) from None
-    except openai.OpenAIError:
-        logger.warning("OpenAI request failed", exc_info=True)
-        raise api_error(502, "upstream_error", "The model service failed.") from None
 
 
 async def _relay(

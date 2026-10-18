@@ -8,16 +8,23 @@ wait on `quota_exceeded` or `rate_limited`.
 """
 from __future__ import annotations
 
+import contextlib
+import logging
 import math
+from collections.abc import Iterator
 from datetime import UTC, datetime, time, timedelta
 from typing import Annotated
 
+import openai
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from cloud import observability
 from cloud.api.services import Services
 from cloud.auth.tokens import AccessClaims, InvalidTokenError
+from core.errors import MissingAPIKeyError
+
+logger = logging.getLogger(__name__)
 
 _bearer = HTTPBearer(auto_error=False)
 
@@ -44,6 +51,38 @@ async def current_user(
 
 def api_error(status_code: int, code: str, message: str, **extra: object) -> HTTPException:
     return HTTPException(status_code, detail={"code": code, "message": message, **extra})
+
+
+@contextlib.contextmanager
+def upstream_errors() -> Iterator[None]:
+    """OpenAI's failures, as answers the runtime can act on."""
+    try:
+        yield
+    except MissingAPIKeyError:
+        logger.error("The platform OpenAI key is not configured")
+        raise api_error(503, "llm_unavailable", "The model service is not configured.") from None
+    except (openai.BadRequestError, openai.UnprocessableEntityError) as exc:
+        raise api_error(400, "invalid_request", exc.message) from None
+    except (openai.AuthenticationError, openai.PermissionDeniedError):
+        logger.error("OpenAI refused the platform key")
+        raise api_error(503, "llm_unavailable", "The model service is unavailable.") from None
+    except openai.APITimeoutError:
+        # Deliberately not retried (cloud.llm.openai_client), and Container Apps
+        # cancels the request at 240 seconds anyway. Saying so plainly matters:
+        # the runtime would otherwise report the whole cloud as unreachable.
+        raise api_error(
+            504,
+            "model_timeout",
+            "The model took too long to answer. Try a smaller task, or a faster model.",
+        ) from None
+    except (openai.RateLimitError, openai.APIConnectionError):
+        # Already retried with backoff in cloud.llm.openai_client.
+        raise api_error(
+            503, "llm_unavailable", "The model service is busy. Try again shortly."
+        ) from None
+    except openai.OpenAIError:
+        logger.warning("OpenAI request failed", exc_info=True)
+        raise api_error(502, "upstream_error", "The model service failed.") from None
 
 
 def unauthorized(code: str, message: str) -> HTTPException:

@@ -3,7 +3,7 @@
 
 It uses the platform key its own process configured
 (`cloud.llm.openai_client.use_api_key`), and only the Cloud API builds one,
-behind sign-in, allowlists and quotas (`cloud/api/llm_gateway.py`). The desktop
+behind sign-in, allowlists and quotas (`cloud/llm/routes.py`). The desktop
 runtime always gets `core/remote/gateway.py` instead, which calls that API.
 """
 from __future__ import annotations

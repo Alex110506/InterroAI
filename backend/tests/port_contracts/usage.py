@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
-from cloud.db.usage import Quota, UsageTotals
+from cloud.llm.usage import Quota, UsageTotals
 
 DAY = date(2026, 9, 15)
 QUOTA = Quota(requests=3, tokens=1_000)

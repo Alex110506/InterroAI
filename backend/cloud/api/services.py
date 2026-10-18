@@ -26,11 +26,11 @@ from cloud.auth.signin import SignInService
 from cloud.auth.tokens import TokenSigner
 from cloud.db.notifications import JobNotifications, asyncpg_dsn
 from cloud.db.session import anonymous_scope, create_engine, create_session_factory
-from cloud.db.usage import PostgresUsageMeter, Quota, UsageMeter
 from cloud.indexing.embeddings import embed_texts
 from cloud.indexing.ports import JobQueue
 from cloud.llm import openai_client
 from cloud.llm.gateway import OpenAIGateway
+from cloud.llm.usage import PostgresUsageMeter, Quota, UsageMeter
 from cloud.projects.repository import ProjectRepository
 from cloud.settings import ApiSettings
 from core.models.gateway import ModelGateway
