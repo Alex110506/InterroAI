@@ -47,11 +47,17 @@ def _modules(*folders: str) -> list[str]:
 
 
 def _cloud_modules() -> list[str]:
-    """Every module under `cloud/`, at any depth, except the Alembic migrations."""
+    """
+    Every module under `cloud/`, at any depth, as a backend-relative POSIX path.
+
+    `__init__.py` files count: one runs on every import of its package, so an
+    import there is the likeliest to start a cycle. Only Alembic's own folder,
+    `cloud/migrations/`, is left out; a folder of that name anywhere else is not.
+    """
     return sorted(
-        str(path.relative_to(BACKEND))
-        for path in (BACKEND / "cloud").rglob("*.py")
-        if path.name != "__init__.py" and "migrations" not in path.parts
+        relative.as_posix()
+        for relative in (path.relative_to(BACKEND) for path in (BACKEND / "cloud").rglob("*.py"))
+        if relative.parts[:2] != ("cloud", "migrations")
     )
 
 
@@ -197,11 +203,13 @@ def test_features_depend_on_each_other_one_way(module):
 
 
 def test_every_cloud_package_has_a_place_in_the_layering():
-    """A new package with no entry would escape the rule above without failing it."""
-    packages = {
-        init.parent.relative_to(BACKEND / "cloud").parts[0]
-        for init in (BACKEND / "cloud").glob("*/__init__.py")
-    }
+    """
+    A new package with no entry would escape the rule above without failing it.
+
+    Packages are read from the modules, not from `__init__.py` files, so a
+    folder created without one, which Python still imports, is caught too.
+    """
+    packages = {module.split("/")[1] for module in _cloud_modules() if module.count("/") >= 2}
     assert packages == set(_CLOUD_DEPENDENCIES) | {"api"}
 
 

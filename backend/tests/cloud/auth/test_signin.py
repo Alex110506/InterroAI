@@ -2,7 +2,7 @@
 The sign-in flow as a service: in-memory accounts, a fake GitHub, a controllable clock.
 
 The HTTP layer over it is covered in `test_auth_routes.py`; the Postgres
-accounts in `tests/cloud/db/test_accounts.py`.
+accounts in `test_accounts.py`, both beside this file.
 """
 from __future__ import annotations
 

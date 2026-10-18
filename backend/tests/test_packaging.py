@@ -14,16 +14,31 @@ from pathlib import Path
 BACKEND = Path(__file__).resolve().parents[1]
 
 
+#: Folders of Python files that are not packages: Alembic loads its scripts by path.
+_NOT_PACKAGES = (("cloud", "migrations"),)
+
+
 def _packages_on_disk() -> set[str]:
-    """The dotted name of every package under a top-level package of `backend/`."""
+    """
+    The dotted name of every folder of Python files under a top-level package.
+
+    Counted by its modules rather than its `__init__.py`, so a folder created
+    without one, which Python still imports as a namespace package, shows up
+    here, and fails the comparison until it is declared.
+    """
     roots = [
         path for path in BACKEND.iterdir()
         if path.is_dir() and not path.name.startswith(".") and (path / "__init__.py").exists()
     ]
-    return {
-        ".".join(init.parent.relative_to(BACKEND).parts)
+    folders = {
+        module.parent.relative_to(BACKEND).parts
         for root in roots
-        for init in root.rglob("__init__.py")
+        for module in root.rglob("*.py")
+    }
+    return {
+        ".".join(parts)
+        for parts in folders
+        if not any(parts[: len(excluded)] == excluded for excluded in _NOT_PACKAGES)
     }
 
 
