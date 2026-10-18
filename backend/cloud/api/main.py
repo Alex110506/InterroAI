@@ -18,10 +18,11 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from cloud.api import auth, indexing, llm_gateway, projects
+from cloud.api import auth, indexing, llm_gateway
 from cloud.api.middleware import RequestContextMiddleware
 from cloud.api.services import Services, build_services
 from cloud.observability import configure_logging
+from cloud.projects.routes import router as projects_router
 from cloud.settings import ApiSettings
 
 VERSION = "0.1.0"
@@ -50,7 +51,7 @@ def create_app(services: Services | None = None) -> FastAPI:
     app.add_middleware(RequestContextMiddleware)
 
     app.include_router(auth.router)
-    app.include_router(projects.router)
+    app.include_router(projects_router)
     app.include_router(indexing.router)
     app.include_router(llm_gateway.router)
 

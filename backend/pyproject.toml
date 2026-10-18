@@ -73,6 +73,7 @@ packages = [
     "cloud.db",
     "cloud.indexing",
     "cloud.llm",
+    "cloud.projects",
     "cloud.worker",
     "contracts",
     "core",
