@@ -14,17 +14,17 @@ The agent's tools always run on your machine, so edits land on your disk directl
 | --- | --- |
 | **Models** (`ModelGateway`) | The LLM gateway: platform key, model allowlist, rate limits and daily quotas |
 | **Semantic index** (`SemanticIndex`) | Blob upload → Service Bus → Embed Worker → pgvector |
-| **Sign-in** | GitHub, in the system browser, with PKCE |
+| **Sign-in** | Auth0, with GitHub as its only connection: in the system browser, with PKCE |
 
 `core/providers.py` is the one place that names an implementation. The agents never import OpenAI, the vector store or the cloud clients, and `tests/test_boundaries.py` fails the build if they start to.
 
-![InterroAI on Azure: the Electron app and a local Python runtime on the user's machine, where the agent loop and its file tools run; in Azure, a Web API container app for GitHub PKCE sign-in, projects and sync, the LLM gateway and search, feeding index jobs through Service Bus to an Embed Worker that scales from zero, with PostgreSQL and pgvector holding vectors and line ranges but no code, and Blob Storage holding uploads](docs/azure-architecture.svg)
+![InterroAI on Azure: the Electron app and a local Python runtime on the user's machine, where the agent loop and its file tools run; in Azure, a Web API container app that checks Auth0 access tokens and serves projects and sync, the LLM gateway and search, feeding index jobs through Service Bus to an Embed Worker that scales from zero, with PostgreSQL and pgvector holding vectors and line ranges but no code, and Blob Storage holding uploads](docs/azure-architecture.svg)
 
 The reasoning behind the diagram's main choices is recorded in [`docs/adr/`](docs/adr/README.md).
 
-- **Electron app** (`frontend/`) — React UI. Its main process starts the local runtime on a free `127.0.0.1` port with a random launch token, and runs the browser half of GitHub sign-in.
+- **Electron app** (`frontend/`) — React UI. Its main process starts the local runtime on a free `127.0.0.1` port with a random launch token, and runs the browser half of sign-in: Auth0, straight on to GitHub.
 - **Local runtime** (`backend/`: `api/`, `agents/`, `core/`) — FastAPI over the agent pipeline. `core/` is grouped by where each part runs: `workspace/` (your project on disk), `index/` (the indexing service), `models/` (OpenAI access), `local/` (the repo-map cache and the keychain) and `remote/` (the Cloud API clients). Payloads that cross service boundaries live in `contracts/`.
-- **Cloud API** (`backend/cloud/`) — FastAPI for Azure Container Apps, one folder per feature around the `cloud/api/` shell: GitHub sign-in (`auth/`), projects (`projects/`), sync, upload URLs, index jobs with live progress over server-sent events and search (`indexing/`), and the LLM gateway (`llm/`).
+- **Cloud API** (`backend/cloud/`) — FastAPI for Azure Container Apps, one folder per feature around the `cloud/api/` shell: Auth0 token checks and users (`auth/`), projects (`projects/`), sync, upload URLs, index jobs with live progress over server-sent events and search (`indexing/`), and the LLM gateway (`llm/`).
 - **Embed Worker** (`backend/cloud/worker/`) — takes index jobs off Service Bus, embeds the chunks, and changes the index in one transaction.
 - **Data** — PostgreSQL with pgvector and row-level security per user; Blob Storage for uploads; Service Bus for jobs.
 
@@ -47,7 +47,7 @@ The backend's dependencies come in three sets, so the cloud images stay small: t
 
 The app signs in to a Cloud API, so start one. Docker stands in for the Azure services: Postgres with pgvector, Azurite for Blob Storage, and the Service Bus emulator. The emulator needs SQL Server, which has no arm64 image, so on Apple Silicon turn on Docker Desktop's Rosetta setting.
 
-1. Copy `.env.example` to `.env` at the repo root and fill it in; its comments explain each value. You need a GitHub OAuth App with the callback URL `http://localhost:8080/auth/github/callback`, and your GitHub login in `INTERROAI_ALLOWED_GITHUB_LOGINS`.
+1. Copy `.env.example` to `.env` at the repo root and fill it in; its comments explain each value. You need an Auth0 tenant with an API, a Native application and the GitHub connection (`.env.example` lists the exact settings, including the three loopback callback URLs), and your GitHub login in `INTERROAI_ALLOWED_GITHUB_LOGINS`.
 2. Start the stack and create the schema:
    ```bash
    docker compose up -d

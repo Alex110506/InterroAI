@@ -1,6 +1,6 @@
 <svg width="100%" viewBox="0 0 840 970" role="img" xmlns="http://www.w3.org/2000/svg">
   <title style="font-family: system-ui, sans-serif;">InterroAI Cloud Architecture - Azure, Local Execution</title>
-  <desc style="font-family: system-ui, sans-serif;">Architecture diagram for InterroAI on Azure. The agent loop and its file tools run on the user's machine inside a local Python runtime driven by the Electron app. The runtime calls a FastAPI Web API on Azure Container Apps for GitHub OAuth sessions, the LLM gateway, semantic search and project sync, and uploads changed chunks straight to Blob Storage with a SAS URL. The Web API enqueues index jobs on Service Bus; an Embed Worker on Container Apps consumes them, embeds chunks with OpenAI, and upserts vectors into PostgreSQL with pgvector. The cloud stores vectors, paths, line ranges and file hashes, never code text.</desc>
+  <desc style="font-family: system-ui, sans-serif;">Architecture diagram for InterroAI on Azure. The agent loop and its file tools run on the user's machine inside a local Python runtime driven by the Electron app. The app signs in through Auth0 with GitHub; the runtime calls a FastAPI Web API on Azure Container Apps, which checks Auth0's access tokens, for the LLM gateway, semantic search and project sync, and uploads changed chunks straight to Blob Storage with a SAS URL. The Web API enqueues index jobs on Service Bus; an Embed Worker on Container Apps consumes them, embeds chunks with OpenAI, and upserts vectors into PostgreSQL with pgvector. The cloud stores vectors, paths, line ranges and file hashes, never code text.</desc>
 
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
@@ -13,10 +13,10 @@
 
   <!-- ================= EXTERNAL SERVICES ================= -->
   <g>
-    <!-- GitHub OAuth -->
+    <!-- Auth0 -->
     <rect x="60" y="20" width="180" height="56" rx="8" fill="#fcfcfb" stroke="#e5e5e5" stroke-width="1"/>
-    <text x="150" y="38" text-anchor="middle" dominant-baseline="central" style="fill:#111; font-family: system-ui, sans-serif; font-size: 14px; font-weight: 500;">GitHub OAuth App</text>
-    <text x="150" y="58" text-anchor="middle" dominant-baseline="central" style="fill:#52514e; font-family: system-ui, sans-serif; font-size: 12px;">Identity only · no scopes</text>
+    <text x="150" y="38" text-anchor="middle" dominant-baseline="central" style="fill:#111; font-family: system-ui, sans-serif; font-size: 14px; font-weight: 500;">Auth0 · GitHub</text>
+    <text x="150" y="58" text-anchor="middle" dominant-baseline="central" style="fill:#52514e; font-family: system-ui, sans-serif; font-size: 12px;">Sign-in · rotating tokens</text>
 
     <!-- OpenAI API -->
     <rect x="330" y="20" width="180" height="56" rx="8" fill="#fcfcfb" stroke="#e5e5e5" stroke-width="1"/>
@@ -52,8 +52,8 @@
     <text x="165" y="195" text-anchor="middle" style="fill:#111; font-family: system-ui, sans-serif; font-size: 14px; font-weight: 500;">Web API · Container App</text>
 
     <rect x="55" y="215" width="220" height="50" rx="8" fill="#eeedfe" stroke="#534ab7" stroke-width="1"/>
-    <text x="165" y="232" text-anchor="middle" dominant-baseline="central" style="fill:#3c3489; font-family: system-ui, sans-serif; font-size: 14px; font-weight: 500;">Auth &amp; Sessions</text>
-    <text x="165" y="250" text-anchor="middle" dominant-baseline="central" style="fill:#534ab7; font-family: system-ui, sans-serif; font-size: 12px;">GitHub OAuth · PKCE → JWT</text>
+    <text x="165" y="232" text-anchor="middle" dominant-baseline="central" style="fill:#3c3489; font-family: system-ui, sans-serif; font-size: 14px; font-weight: 500;">Auth &amp; Users</text>
+    <text x="165" y="250" text-anchor="middle" dominant-baseline="central" style="fill:#534ab7; font-family: system-ui, sans-serif; font-size: 12px;">Auth0 JWT check · allowlist</text>
 
     <rect x="55" y="275" width="220" height="50" rx="8" fill="#eeedfe" stroke="#534ab7" stroke-width="1"/>
     <text x="165" y="292" text-anchor="middle" dominant-baseline="central" style="fill:#3c3489; font-family: system-ui, sans-serif; font-size: 14px; font-weight: 500;">Projects &amp; Sync</text>
@@ -168,7 +168,7 @@
     <rect x="550" y="765" width="250" height="120" rx="12" fill="#fff7ed" stroke="#ea580c" stroke-width="1"/>
     <text x="675" y="797" text-anchor="middle" dominant-baseline="central" style="fill:#9a3412; font-family: system-ui, sans-serif; font-size: 14px; font-weight: 500;">Electron App</text>
     <text x="675" y="822" text-anchor="middle" dominant-baseline="central" style="fill:#c2410c; font-family: system-ui, sans-serif; font-size: 12px;">React UI · diff review</text>
-    <text x="675" y="842" text-anchor="middle" dominant-baseline="central" style="fill:#c2410c; font-family: system-ui, sans-serif; font-size: 12px;">GitHub sign-in · PKCE loopback</text>
+    <text x="675" y="842" text-anchor="middle" dominant-baseline="central" style="fill:#c2410c; font-family: system-ui, sans-serif; font-size: 12px;">Auth0 sign-in · PKCE loopback</text>
     <text x="675" y="862" text-anchor="middle" dominant-baseline="central" style="fill:#c2410c; font-family: system-ui, sans-serif; font-size: 12px;">Starts runtime · launch token</text>
   </g>
 

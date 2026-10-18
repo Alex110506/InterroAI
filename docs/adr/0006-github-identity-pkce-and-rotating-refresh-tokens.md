@@ -1,6 +1,6 @@
 # ADR 0006: GitHub for identity, PKCE through a loopback redirect, rotating refresh tokens
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR 0010](0010-auth0-for-sign-in.md)
 - **Date:** 2026-09-15
 
 ## Context
