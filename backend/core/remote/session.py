@@ -1,19 +1,23 @@
 """
-The runtime's signed-in session with the Cloud API.
+The runtime's signed-in session with the Cloud API, through Auth0.
 
-It holds two credentials. The access token lives only in memory and lasts
-fifteen minutes. The refresh token lasts thirty days and lives in the OS
+Auth0 issues the credentials; the Cloud API only checks them. The access token
+lives only in memory and is short-lived. The refresh token lives in the OS
 keychain, never in a file, so the app stays signed in across restarts.
 
 Every call goes through `request` or `stream`, which attach the access token
-and, when the API answers 401, refresh once and retry. Many requests can meet an
-expired token at the same moment, and they share a single refresh. Refresh
-tokens rotate, so a second refresh with the same token would look to the API
-like a stolen token being replayed, and would end every session this user has.
+and, when the API answers 401, refresh once at Auth0 and retry. Many requests
+can meet an expired token at the same moment, and they share a single refresh.
+Auth0 rotates refresh tokens with reuse detection, so a second refresh with the
+same token would look like a stolen token being replayed, and Auth0 would end
+the whole session.
 
-Signing in begins in the Electron app, which runs the browser half (PKCE and the
-loopback listener) and hands the login code and its verifier to this process
-through `PUT /api/session`. The tokens themselves never pass through the app.
+Signing in begins in the Electron app, which runs the browser half (PKCE, the
+loopback listener, Auth0 and GitHub) and hands the authorization code, its
+verifier and the redirect URI to this process through `PUT /api/session`. This
+process redeems them at Auth0, so the tokens never pass through the app. Where
+Auth0 is, and which client this app is, come from the Cloud API's
+`/auth/config`, so the desktop build carries nothing but the API's address.
 """
 from __future__ import annotations
 
@@ -45,6 +49,15 @@ class Identity:
     avatar_url: str | None
 
 
+@dataclass(frozen=True)
+class AuthConfig:
+    """Where to sign in: the Auth0 tenant, this app's client id, the API's audience."""
+
+    domain: str
+    client_id: str
+    audience: str
+
+
 class CloudSession:
     def __init__(self, api_url: str, *, transport: httpx.AsyncBaseTransport | None = None) -> None:
         self.api_url = api_url.rstrip("/")
@@ -53,6 +66,7 @@ class CloudSession:
         self._access_token: str | None = None
         self._expires_at = 0.0
         self._identity: Identity | None = None
+        self._auth_config: AuthConfig | None = None
         self._refresh_lock = asyncio.Lock()
 
     # ── State ────────────────────────────────────────────────────────────────
@@ -73,18 +87,39 @@ class CloudSession:
             )
         return self._identity
 
+    async def auth_config(self) -> AuthConfig:
+        """Where to sign in, from the Cloud API. Fetched once per process."""
+        if self._auth_config is None:
+            response = await self._send("GET", "/auth/config")
+            if not response.is_success:
+                raise cloud_error(response)
+            body = response.json()
+            self._auth_config = AuthConfig(
+                domain=body["domain"], client_id=body["client_id"], audience=body["audience"]
+            )
+        return self._auth_config
+
     # ── Signing in and out ───────────────────────────────────────────────────
 
-    async def sign_in(self, *, code: str, code_verifier: str) -> Identity:
-        """Redeem the login code the app's browser leg received."""
-        response = await self._send(
-            "POST",
-            "/auth/token",
-            json={"grant_type": "authorization_code", "code": code, "code_verifier": code_verifier},
+    async def sign_in(self, *, code: str, code_verifier: str, redirect_uri: str) -> Identity:
+        """Redeem at Auth0 the authorization code the app's browser leg received."""
+        config = await self.auth_config()
+        response = await self._auth0(
+            config,
+            "/oauth/token",
+            {
+                "grant_type": "authorization_code",
+                "client_id": config.client_id,
+                "code": code,
+                "code_verifier": code_verifier,
+                "redirect_uri": redirect_uri,
+            },
         )
         if not response.is_success:
-            raise cloud_error(response)
+            raise auth0_error(response)
         self._adopt(response.json())
+        # Auth0 signs in any GitHub account; the API decides who may use InterroAI.
+        # A refusal here forgets the tokens again (see `_authorised`).
         return await self.identity(refresh=True)
 
     def adopt_tokens(self, *, access_token: str, refresh_token: str, expires_in: float) -> None:
@@ -99,10 +134,13 @@ class CloudSession:
         if not refresh_token:
             return
         try:
-            await self._send("POST", "/auth/logout", json={"refresh_token": refresh_token})
-        except CloudUnavailableError:
-            # Signed out here all the same; the token expires on the server in time.
-            logger.info("Signed out locally; the Cloud API was unreachable to revoke the session")
+            config = await self.auth_config()
+            await self._auth0(
+                config, "/oauth/revoke", {"client_id": config.client_id, "token": refresh_token}
+            )
+        except CloudError:
+            # Signed out here all the same; Auth0 lets the token lapse in time.
+            logger.info("Signed out locally; Auth0 was unreachable to revoke the session")
 
     # ── Requests ─────────────────────────────────────────────────────────────
 
@@ -132,6 +170,10 @@ class CloudSession:
             response = await self._attempt(client, method, path, token, stream=stream, **kwargs)
         if response.is_success:
             return response
+        if response.status_code == 403 and error_detail(response).get("code") == "access_denied":
+            # A valid Auth0 session for an account InterroAI does not admit: over here too.
+            self._forget()
+            raise NotSignedInError(error_detail(response).get("message"))
         raise cloud_error(response)
 
     async def _attempt(
@@ -169,19 +211,23 @@ class CloudSession:
                 self._forget()
                 raise NotSignedInError()
 
-            response = await self._send(
-                "POST",
-                "/auth/token",
-                json={"grant_type": "refresh_token", "refresh_token": refresh_token},
+            config = await self.auth_config()
+            response = await self._auth0(
+                config,
+                "/oauth/token",
+                {
+                    "grant_type": "refresh_token",
+                    "client_id": config.client_id,
+                    "refresh_token": refresh_token,
+                },
             )
             if response.status_code in (400, 401, 403):
-                # Spent, expired, revoked or refused: over on the server, so over here.
+                # Spent, expired, revoked or reused: over at Auth0, so over here.
                 self._forget()
-                message = error_detail(response).get("message")
-                raise NotSignedInError(message if response.status_code == 403 else None)
+                raise NotSignedInError()
             if not response.is_success:
-                raise cloud_error(response)
-            self._adopt(response.json())
+                raise CloudUnavailableError("Sign-in is unavailable right now. Try again shortly.")
+            self._adopt(response.json(), previous_refresh_token=refresh_token)
 
     def _fresh(self) -> bool:
         return (
@@ -189,10 +235,11 @@ class CloudSession:
             and time.monotonic() < self._expires_at - _EXPIRY_MARGIN_SECONDS
         )
 
-    def _adopt(self, body: dict) -> None:
+    def _adopt(self, body: dict, *, previous_refresh_token: str | None = None) -> None:
         self.adopt_tokens(
             access_token=body["access_token"],
-            refresh_token=body["refresh_token"],
+            # Auth0 sends a new one when rotation is on; without rotation the old one stays good.
+            refresh_token=body.get("refresh_token") or previous_refresh_token,
             expires_in=float(body["expires_in"]),
         )
 
@@ -210,11 +257,14 @@ class CloudSession:
             base_url=self.api_url, timeout=_DEFAULT_TIMEOUT, transport=self._transport
         )
 
-    async def _send(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
-        """An unauthenticated request, for the sign-in endpoints themselves."""
+    async def _send(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
+        """An unauthenticated request: to the API's `/auth/config`, or to Auth0."""
         async with self._client() as client:
-            request = client.build_request(method, path, **kwargs)
+            request = client.build_request(method, url, **kwargs)
             return await _dispatch(client, request, stream=False)
+
+    async def _auth0(self, config: AuthConfig, path: str, form: dict[str, str]) -> httpx.Response:
+        return await self._send("POST", f"https://{config.domain}{path}", data=form)
 
 
 async def _dispatch(
@@ -234,6 +284,18 @@ def error_detail(response: httpx.Response) -> dict:
         return {}
     detail = body.get("detail") if isinstance(body, dict) else None
     return detail if isinstance(detail, dict) else {}
+
+
+def auth0_error(response: httpx.Response) -> CloudError:
+    """An Auth0 refusal at its token endpoint (OAuth's `error` body), as a runtime error."""
+    if response.status_code >= 500 or response.status_code == 429:
+        return CloudUnavailableError("Sign-in is unavailable right now. Try again shortly.")
+    try:
+        body = response.json()
+    except ValueError:
+        body = {}
+    code = body.get("error") if isinstance(body, dict) else None
+    return CloudError("Sign-in did not complete. Try again.", code=code or "sign_in_failed")
 
 
 def cloud_error(response: httpx.Response) -> CloudError:
