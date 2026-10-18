@@ -11,7 +11,8 @@ The architecture itself is drawn in [`../azure-architecture.svg`](../azure-archi
 | [0003](0003-pgvector-over-ai-search.md) | One Postgres Flexible Server with pgvector holds both the app data and the vectors |
 | [0004](0004-claim-check-uploads-and-at-least-once-jobs.md) | Chunks go to Blob Storage by SAS URL; jobs run at least once off Service Bus |
 | [0005](0005-tenant-isolation-with-row-level-security.md) | Postgres row-level security keeps each user's data apart |
-| [0006](0006-github-identity-pkce-and-rotating-refresh-tokens.md) | GitHub for identity only, PKCE through a loopback redirect, rotating refresh tokens |
+| [0006](0006-github-identity-pkce-and-rotating-refresh-tokens.md) | *Superseded by 0010.* GitHub for identity only, PKCE through a loopback redirect, rotating refresh tokens |
 | [0007](0007-a-launch-token-for-the-local-runtime.md) | The local runtime answers only the app that started it |
 | [0008](0008-in-process-rate-limits-without-redis.md) | Exact daily quotas in Postgres; approximate rate limits in memory, no Redis |
 | [0009](0009-one-architecture-not-two.md) | The local-only mode is removed; everything but the user's files goes through the Cloud API |
+| [0010](0010-auth0-for-sign-in.md) | Auth0 runs sign-in, with GitHub as its only connection; the API only checks its tokens |

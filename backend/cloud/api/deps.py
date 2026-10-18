@@ -3,8 +3,8 @@ FastAPI dependencies and helpers shared by the routers.
 
 Errors meant for the app carry a stable `code` in `detail`, so the runtime can
 act on them without parsing the message, which is for people: refresh on
-`invalid_token`, show the sign-in screen on `not_signed_in`, tell the user to
-wait on `quota_exceeded` or `rate_limited`.
+`invalid_token`, show the sign-in screen on `not_signed_in` or `access_denied`,
+tell the user to wait on `quota_exceeded` or `rate_limited`.
 """
 from __future__ import annotations
 
@@ -21,7 +21,8 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from cloud import observability
 from cloud.api.services import Services
-from cloud.auth.tokens import AccessClaims, InvalidTokenError
+from cloud.auth.auth0 import Auth0Unavailable, InvalidTokenError
+from cloud.auth.identity import AccessClaims, AccessDeniedError
 from core.errors import MissingAPIKeyError
 
 logger = logging.getLogger(__name__)
@@ -33,18 +34,31 @@ async def get_services(request: Request) -> Services:
     return request.app.state.services
 
 
+async def bearer_token(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
+) -> str:
+    if credentials is None:
+        raise unauthorized("not_signed_in", "Sign in to use InterroAI.")
+    return credentials.credentials
+
+
 async def current_user(
     services: Annotated[Services, Depends(get_services)],
-    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
+    token: Annotated[str, Depends(bearer_token)],
 ) -> AccessClaims:
     # Async on purpose: FastAPI runs plain functions in a worker thread, and the
     # user id set below would not reach this request's access log line.
-    if credentials is None:
-        raise unauthorized("not_signed_in", "Sign in to use InterroAI.")
     try:
-        claims = services.signer.read_access_token(credentials.credentials)
+        claims = await services.identity.resolve(token)
     except InvalidTokenError:
         raise unauthorized("invalid_token", "The access token is invalid or has expired.") from None
+    except AccessDeniedError as exc:
+        raise api_error(403, "access_denied", str(exc)) from None
+    except Auth0Unavailable:
+        logger.warning("Auth0 was unreachable while checking a request", exc_info=True)
+        raise api_error(
+            503, "auth_unavailable", "Sign-in is unavailable right now. Try again shortly."
+        ) from None
     observability.user_id.set(claims.user_id)
     return claims
 
@@ -122,16 +136,6 @@ def rate_limit(limit: str):
     return check
 
 
-def rate_limit_by_address(limit: str):
-    """A dependency that counts the request against *limit* per client address, for sign-in."""
-
-    async def check(request: Request, services: Annotated[Services, Depends(get_services)]) -> None:
-        address = request.client.host if request.client else "unknown"
-        _spend(services, limit, f"address:{address}")
-
-    return check
-
-
 def _spend(services: Services, limit: str, caller: str) -> None:
     wait = services.limiter.hit(limit, caller, getattr(services.limits.rates, limit))
     if wait:
@@ -147,3 +151,4 @@ def _spend(services: Services, limit: str, caller: str) -> None:
 
 ServicesDep = Annotated[Services, Depends(get_services)]
 CurrentUser = Annotated[AccessClaims, Depends(current_user)]
+BearerToken = Annotated[str, Depends(bearer_token)]

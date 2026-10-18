@@ -31,7 +31,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from cloud.api.deps import ServicesDep, api_error, charge_request, rate_limit, upstream_errors
 from cloud.api.services import Services
-from cloud.auth.tokens import AccessClaims
+from cloud.auth.identity import AccessClaims
 from core.models.gateway import LONG_TIMEOUT
 
 logger = logging.getLogger(__name__)

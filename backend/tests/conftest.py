@@ -322,7 +322,7 @@ def tmp_project(tmp_path) -> Path:
 
 _TEST_DATABASE = "interroai_test"
 _CLOUD_TABLES = (
-    "users, refresh_tokens, login_codes, projects, chunks, embedding_cache, index_jobs, usage"
+    "users, projects, chunks, embedding_cache, index_jobs, usage"
 )
 
 

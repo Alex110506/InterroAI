@@ -12,7 +12,7 @@ from cloud.api.services import Services
 
 
 def _services(*startup) -> Services:
-    return Services(signin=None, signer=None, accounts=None, projects=None, startup=list(startup))
+    return Services(identity=None, projects=None, startup=list(startup))
 
 
 def test_health_reports_ok():

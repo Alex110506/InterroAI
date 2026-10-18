@@ -13,18 +13,17 @@ from __future__ import annotations
 import asyncio
 import itertools
 import json
-from datetime import timedelta
 from types import SimpleNamespace
 from uuid import uuid4
 
 import httpx
 import pytest
+from fakes.auth0 import FakeAuth0
 from fakes.queue import InMemoryJobQueue
 
 from cloud.api.main import create_app
 from cloud.api.services import Limits, Services
 from cloud.auth.accounts import PostgresAccounts
-from cloud.auth.tokens import TokenSigner
 from cloud.db.models import EMBEDDING_DIMENSIONS
 from cloud.db.session import anonymous_scope, service_scope
 from cloud.indexing.adapters.postgres_store import PostgresChunkStore
@@ -48,7 +47,7 @@ def _axis(position: int) -> list[float]:
 
 @pytest.fixture
 async def api(app_sessions, blob_uploads):
-    signer = TokenSigner("i" * 32, issuer="http://testserver", access_ttl=timedelta(minutes=15))
+    tenant = FakeAuth0()
     accounts = PostgresAccounts(lambda: anonymous_scope(app_sessions))
     queries: list[str] = []
 
@@ -57,9 +56,7 @@ async def api(app_sessions, blob_uploads):
         return _axis(0)
 
     services = Services(
-        signin=None,
-        signer=signer,
-        accounts=accounts,
+        identity=tenant.identity(accounts, allowlist=("alice", "bob")),
         projects=ProjectRepository(app_sessions),
         sessions=app_sessions,
         uploads=blob_uploads,
@@ -77,7 +74,7 @@ async def api(app_sessions, blob_uploads):
 
         async def sign_in(login: str) -> dict[str, str]:
             user = await accounts.upsert_github_user(next(_github_ids), login, None)
-            return {"Authorization": f"Bearer {signer.access_token(user.id, user.login)}"}
+            return tenant.bearer(user.github_id)
 
         async def new_project(headers: dict[str, str]) -> str:
             response = await client.post("/projects", json={"name": "demo"}, headers=headers)

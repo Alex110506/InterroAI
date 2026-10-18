@@ -1,4 +1,4 @@
-"""The in-memory `Accounts` the sign-in tests run on, held to the shared contract."""
+"""The in-memory `Accounts` the identity tests run on, held to the shared contract."""
 from __future__ import annotations
 
 import pytest

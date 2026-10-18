@@ -9,10 +9,13 @@ const { test } = require('node:test')
 const { pkcePair, signIn } = require('./signin')
 
 const CLOUD = 'https://cloud.example'
+const AUTH0 = { domain: 'tenant.auth0.example', client_id: 'desktop-app', audience: CLOUD }
 const TOKEN = 'launch-token'
+// Any free port: the real list is fixed, and a test run must not depend on it being free.
+const PORTS = [0]
 
 // The runtime's /api/session.
-async function fakeRuntime({ acceptCode = 'login-code' } = {}) {
+async function fakeRuntime({ acceptCode = 'login-code', auth0 = AUTH0 } = {}) {
   const calls = []
   const server = http.createServer(async (req, res) => {
     let raw = ''
@@ -20,7 +23,7 @@ async function fakeRuntime({ acceptCode = 'login-code' } = {}) {
     calls.push({ method: req.method, token: req.headers['x-interroai-token'], body: raw ? JSON.parse(raw) : null })
     res.setHeader('Content-Type', 'application/json')
     if (req.method === 'GET') {
-      res.end(JSON.stringify({ api_url: `${CLOUD}/`, signed_in: false }))
+      res.end(JSON.stringify({ api_url: `${CLOUD}/`, signed_in: false, auth0 }))
     } else if (JSON.parse(raw).code === acceptCode) {
       res.end(JSON.stringify({ api_url: CLOUD, signed_in: true, login: 'octocat', avatar_url: null }))
     } else {
@@ -37,7 +40,7 @@ async function fakeRuntime({ acceptCode = 'login-code' } = {}) {
 }
 
 // A browser that, once opened, goes straight back to the app with each set of
-// query parameters in turn, as the Cloud API would send it. The last visit is
+// query parameters in turn, as Auth0 would send it. The last visit is
 // not awaited: the app answers it only after finishing sign-in.
 function scriptedBrowser(...visits) {
   const browser = { opened: [], pages: [] }
@@ -63,20 +66,26 @@ test('a verifier and its challenge are an S256 pair', () => {
   assert.equal(challenge, sha256(verifier))
 })
 
-test('the login code comes back to the app and goes to the runtime with its verifier', async () => {
+test('the authorization code comes back to the app and goes to the runtime with its verifier', async () => {
   const { calls, close, runtime } = await fakeRuntime()
   const browser = scriptedBrowser({ code: 'login-code' })
   try {
-    const session = await signIn({ runtime, openExternal: browser.openExternal })
+    const session = await signIn({ runtime, openExternal: browser.openExternal, ports: PORTS })
 
     assert.equal(session.login, 'octocat')
     const opened = new URL(browser.opened[0])
-    assert.equal(`${opened.origin}${opened.pathname}`, `${CLOUD}/auth/github/start`)
+    assert.equal(`${opened.origin}${opened.pathname}`, 'https://tenant.auth0.example/authorize')
+    assert.equal(opened.searchParams.get('response_type'), 'code')
+    assert.equal(opened.searchParams.get('client_id'), 'desktop-app')
+    assert.equal(opened.searchParams.get('audience'), CLOUD)
+    assert.equal(opened.searchParams.get('connection'), 'github')
+    assert.match(opened.searchParams.get('scope'), /\boffline_access\b/)
     assert.equal(opened.searchParams.get('code_challenge_method'), 'S256')
     assert.match(opened.searchParams.get('redirect_uri'), /^http:\/\/127\.0\.0\.1:\d+\/callback$/)
 
     const put = calls.find((call) => call.method === 'PUT')
     assert.equal(put.body.code, 'login-code')
+    assert.equal(put.body.redirect_uri, opened.searchParams.get('redirect_uri'))
     assert.equal(sha256(put.body.code_verifier), opened.searchParams.get('code_challenge'))
     assert.ok(calls.every((call) => call.token === TOKEN), 'every call to the runtime carries the launch token')
 
@@ -92,7 +101,7 @@ test('a refusal on the way back fails the sign-in with its code', async () => {
   const { calls, close, runtime } = await fakeRuntime()
   const browser = scriptedBrowser({ error: 'access_denied' })
   try {
-    await assert.rejects(signIn({ runtime, openExternal: browser.openExternal }), { code: 'access_denied' })
+    await assert.rejects(signIn({ runtime, openExternal: browser.openExternal, ports: PORTS }), { code: 'access_denied' })
     assert.ok(!calls.some((call) => call.method === 'PUT'), 'nothing is redeemed')
     assert.equal((await browser.pages[0]).status, 403)
   } finally {
@@ -104,7 +113,7 @@ test('a visit with some other state is turned away, and the real one still signs
   const { close, runtime } = await fakeRuntime()
   const browser = scriptedBrowser({ state: 'forged', code: 'stolen-code' }, { code: 'login-code' })
   try {
-    const session = await signIn({ runtime, openExternal: browser.openExternal })
+    const session = await signIn({ runtime, openExternal: browser.openExternal, ports: PORTS })
     assert.equal(session.login, 'octocat')
     assert.equal((await browser.pages[0]).status, 400)
   } finally {
@@ -116,7 +125,7 @@ test('the runtime refusing the code fails the sign-in, and the browser is told',
   const { close, runtime } = await fakeRuntime({ acceptCode: 'some-other-code' })
   const browser = scriptedBrowser({ code: 'login-code' })
   try {
-    await assert.rejects(signIn({ runtime, openExternal: browser.openExternal }), { code: 'invalid_grant' })
+    await assert.rejects(signIn({ runtime, openExternal: browser.openExternal, ports: PORTS }), { code: 'invalid_grant' })
     assert.equal((await browser.pages[0]).status, 400)
   } finally {
     close()
@@ -126,7 +135,7 @@ test('the runtime refusing the code fails the sign-in, and the browser is told',
 test('a sign-in nobody finishes times out', async () => {
   const { close, runtime } = await fakeRuntime()
   try {
-    await assert.rejects(signIn({ runtime, openExternal: async () => {}, timeoutMs: 50 }), { code: 'timeout' })
+    await assert.rejects(signIn({ runtime, openExternal: async () => {}, timeoutMs: 50, ports: PORTS }), { code: 'timeout' })
   } finally {
     close()
   }
@@ -140,9 +149,51 @@ test('the app can cancel a sign-in in progress', async () => {
       runtime,
       openExternal: async () => { setTimeout(() => controller.abort(), 20) },
       signal: controller.signal,
+      ports: PORTS,
     })
     await assert.rejects(pending, { code: 'cancelled' })
   } finally {
+    close()
+  }
+})
+
+test('with the cloud unreachable, sign-in says so and opens no browser', async () => {
+  const { close, runtime } = await fakeRuntime({ auth0: null })
+  const browser = scriptedBrowser({ code: 'login-code' })
+  try {
+    await assert.rejects(signIn({ runtime, openExternal: browser.openExternal, ports: PORTS }), { code: 'cloud_unavailable' })
+    assert.deepEqual(browser.opened, [])
+  } finally {
+    close()
+  }
+})
+
+test('a busy port is skipped for the next one on the list', async () => {
+  const busy = http.createServer()
+  await new Promise((resolve) => busy.listen(0, '127.0.0.1', resolve))
+  const { close, runtime } = await fakeRuntime()
+  const browser = scriptedBrowser({ code: 'login-code' })
+  try {
+    await signIn({ runtime, openExternal: browser.openExternal, ports: [busy.address().port, 0] })
+    const port = Number(new URL(new URL(browser.opened[0]).searchParams.get('redirect_uri')).port)
+    assert.notEqual(port, busy.address().port)
+  } finally {
+    busy.close()
+    close()
+  }
+})
+
+test('with every port on the list busy, sign-in fails saying so', async () => {
+  const busy = http.createServer()
+  await new Promise((resolve) => busy.listen(0, '127.0.0.1', resolve))
+  const { close, runtime } = await fakeRuntime()
+  try {
+    await assert.rejects(
+      signIn({ runtime, openExternal: async () => {}, ports: [busy.address().port] }),
+      { code: 'port_in_use' },
+    )
+  } finally {
+    busy.close()
     close()
   }
 })

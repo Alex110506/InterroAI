@@ -7,12 +7,14 @@ tests also prove that what the API sends back can be rebuilt into them.
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import httpx
 import openai
 import pytest
+from fakes.accounts import InMemoryAccounts
+from fakes.auth0 import FakeAuth0
 from fakes.models import MODEL, FakeGateway, FakeStream, chat_chunks
 from fakes.usage import InMemoryUsageMeter
 from fastapi.testclient import TestClient
@@ -20,7 +22,7 @@ from openai.types.chat import ChatCompletion, ChatCompletionChunk
 
 from cloud.api.main import create_app
 from cloud.api.services import Limits, Services
-from cloud.auth.tokens import TokenSigner
+from cloud.auth.accounts import UserRecord
 from cloud.llm.usage import Quota
 from core.errors import MissingAPIKeyError
 
@@ -44,12 +46,13 @@ def api():
 
 
 def _api(quota: Quota = _ROOMY_QUOTA):
-    signer = TokenSigner("l" * 32, issuer="http://testserver", access_ttl=timedelta(minutes=15))
+    tenant = FakeAuth0().add_user(583231, "Alex110506")
+    accounts = InMemoryAccounts()
+    # A known id, so the usage this user runs up can be read back by it.
+    accounts.users[USER_ID] = UserRecord(USER_ID, 583231, "Alex110506", None)
     gateway, usage = FakeGateway(), InMemoryUsageMeter()
     services = Services(
-        signin=None,
-        signer=signer,
-        accounts=None,
+        identity=tenant.identity(accounts),
         projects=None,
         usage=usage,
         gateway=gateway,
@@ -59,7 +62,7 @@ def _api(quota: Quota = _ROOMY_QUOTA):
         client=TestClient(create_app(services)),
         gateway=gateway,
         usage=usage,
-        headers={"Authorization": f"Bearer {signer.access_token(USER_ID, 'Alex110506')}"},
+        headers=tenant.bearer(583231),
     )
 
 

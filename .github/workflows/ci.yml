@@ -200,9 +200,9 @@ jobs:
             --env "INTERROAI_SERVICEBUS_CONNECTION_STRING=Endpoint=sb://127.0.0.1;SharedAccessKeyName=unused;SharedAccessKey=unused;UseDevelopmentEmulator=true;" \
             --env "INTERROAI_BLOB_CONNECTION_STRING=DefaultEndpointsProtocol=http;AccountName=unused;AccountKey=dW51c2Vk;BlobEndpoint=http://127.0.0.1:1/unused;" \
             --env INTERROAI_OPENAI_API_KEY=unused \
-            --env INTERROAI_GITHUB_CLIENT_ID=unused \
-            --env INTERROAI_GITHUB_CLIENT_SECRET=unused \
-            --env INTERROAI_JWT_SECRET=ci-only-signing-key-long-enough-for-hs256 \
+            --env INTERROAI_AUTH0_DOMAIN=unused.auth0.example \
+            --env INTERROAI_AUTH0_AUDIENCE=https://api.unused.example \
+            --env INTERROAI_AUTH0_CLIENT_ID=unused \
             interroai-api:ci
           if curl --silent --fail --retry 30 --retry-delay 2 --retry-all-errors http://localhost:8080/health; then
             exit 0

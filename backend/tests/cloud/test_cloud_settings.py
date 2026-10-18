@@ -14,9 +14,9 @@ _WORKER = {
 }
 _API = {
     **_WORKER,
-    "github_client_id": "client-id",
-    "github_client_secret": "client-secret",
-    "jwt_secret": "x" * 32,
+    "auth0_domain": "interroai.eu.auth0.com",
+    "auth0_audience": "https://api.interroai.example",
+    "auth0_client_id": "desktop-app",
 }
 
 
@@ -31,7 +31,7 @@ def _api(**overrides) -> ApiSettings:
     return ApiSettings(_env_file=None, **{**_API, **overrides})
 
 
-def test_the_worker_needs_no_sign_in_secrets():
+def test_the_worker_needs_no_auth0_settings():
     settings = WorkerSettings(_env_file=None, **_WORKER)
     assert settings.servicebus_queue == "index-jobs"
 
@@ -60,13 +60,14 @@ def test_an_empty_allowlist_admits_nobody():
     assert _api().allowlist == frozenset()
 
 
-def test_a_short_jwt_secret_is_rejected():
+@pytest.mark.parametrize("missing", ["auth0_domain", "auth0_audience", "auth0_client_id"])
+def test_the_api_will_not_start_without_its_auth0_tenant(missing):
+    values = {key: value for key, value in _API.items() if key != missing}
     with pytest.raises(ValidationError):
-        _api(jwt_secret="too-short")
+        ApiSettings(_env_file=None, **values)
 
 
 def test_secrets_never_appear_in_a_printed_settings_object():
     settings = _api()
     printed = repr(settings) + str(settings)
     assert "sk-test-platform-key" not in printed
-    assert "client-secret" not in printed

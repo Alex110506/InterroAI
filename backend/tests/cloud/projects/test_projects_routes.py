@@ -8,16 +8,15 @@ which is the loop its database connections belong to.
 from __future__ import annotations
 
 import itertools
-from datetime import timedelta
 from types import SimpleNamespace
 
 import httpx
 import pytest
+from fakes.auth0 import FakeAuth0
 
 from cloud.api.main import create_app
 from cloud.api.services import Services
 from cloud.auth.accounts import PostgresAccounts
-from cloud.auth.tokens import TokenSigner
 from cloud.db.session import anonymous_scope
 from cloud.projects.repository import ProjectRepository
 
@@ -28,22 +27,20 @@ _github_ids = itertools.count(50_000)
 
 @pytest.fixture
 async def api(app_sessions):
-    signer = TokenSigner("p" * 32, issuer="http://testserver", access_ttl=timedelta(minutes=15))
+    tenant = FakeAuth0()
     accounts = PostgresAccounts(lambda: anonymous_scope(app_sessions))
     services = Services(
-        signin=None,
-        signer=signer,
-        accounts=accounts,
+        identity=tenant.identity(accounts, allowlist=("alice", "bob")),
         projects=ProjectRepository(app_sessions),
     )
     transport = httpx.ASGITransport(app=create_app(services))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        yield SimpleNamespace(client=client, signer=signer, accounts=accounts)
+        yield SimpleNamespace(client=client, tenant=tenant, accounts=accounts)
 
 
 async def _headers(api, login: str) -> dict[str, str]:
     user = await api.accounts.upsert_github_user(next(_github_ids), login, None)
-    return {"Authorization": f"Bearer {api.signer.access_token(user.id, user.login)}"}
+    return api.tenant.bearer(user.github_id)
 
 
 async def test_a_user_creates_lists_reads_and_deletes_a_project(api):
