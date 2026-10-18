@@ -379,7 +379,7 @@ async def blob_uploads(stack_settings):
     """A BlobUploadStore on a container of its own, so tests never touch dev uploads."""
     from azure.core.exceptions import ServiceRequestError
 
-    from cloud.adapters.blob_uploads import BlobUploadStore
+    from cloud.indexing.adapters.blob_uploads import BlobUploadStore
 
     if not stack_settings.blob_connection_string:
         _stack_unavailable("INTERROAI_BLOB_CONNECTION_STRING is not set")
@@ -401,7 +401,7 @@ async def service_bus_queue(stack_settings):
     from azure.servicebus.aio import ServiceBusClient
     from azure.servicebus.exceptions import ServiceBusError
 
-    from cloud.adapters.service_bus import ServiceBusJobQueue
+    from cloud.indexing.adapters.service_bus import ServiceBusJobQueue
 
     if not stack_settings.servicebus_connection_string:
         pytest.skip("INTERROAI_SERVICEBUS_CONNECTION_STRING is not set")

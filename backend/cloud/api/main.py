@@ -18,10 +18,10 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from cloud.api import indexing
 from cloud.api.middleware import RequestContextMiddleware
 from cloud.api.services import Services, build_services
 from cloud.auth.routes import router as auth_router
+from cloud.indexing.routes import router as indexing_router
 from cloud.llm.routes import router as llm_router
 from cloud.observability import configure_logging
 from cloud.projects.routes import router as projects_router
@@ -54,7 +54,7 @@ def create_app(services: Services | None = None) -> FastAPI:
 
     app.include_router(auth_router)
     app.include_router(projects_router)
-    app.include_router(indexing.router)
+    app.include_router(indexing_router)
     app.include_router(llm_router)
 
     @app.get("/health", tags=["meta"])

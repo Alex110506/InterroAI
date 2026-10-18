@@ -21,14 +21,14 @@ import httpx
 import pytest
 from fakes.queue import InMemoryJobQueue
 
-from cloud.adapters.postgres_store import PostgresChunkStore
 from cloud.api.main import create_app
 from cloud.api.services import Limits, Services
 from cloud.auth.accounts import PostgresAccounts
 from cloud.auth.tokens import TokenSigner
-from cloud.db.jobs import JobRepository
 from cloud.db.models import EMBEDDING_DIMENSIONS
 from cloud.db.session import anonymous_scope, service_scope
+from cloud.indexing.adapters.postgres_store import PostgresChunkStore
+from cloud.indexing.jobs import JobRepository
 from cloud.indexing.ports import IndexedChunk
 from cloud.llm.usage import PostgresUsageMeter, Quota
 from cloud.projects.repository import ProjectRepository

@@ -174,7 +174,7 @@ def test_the_guard_can_see_imports_at_all():
     folders = (
         "agents", "api", "contracts", "core/workspace",
         "core/index", "core/models", "core/local",
-        "cloud/adapters", "cloud/api", "cloud/auth", "cloud/db",
+        "cloud/indexing/adapters", "cloud/api", "cloud/auth", "cloud/db",
         "cloud/indexing", "cloud/llm", "cloud/projects", "cloud/worker",
     )
     assert all(_modules(folder) for folder in folders)

@@ -24,7 +24,6 @@ from fastapi import APIRouter, Depends, Header, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict
 
-from cloud.adapters.postgres_store import PostgresChunkStore
 from cloud.api.deps import (
     CurrentUser,
     ServicesDep,
@@ -33,11 +32,12 @@ from cloud.api.deps import (
     rate_limit,
     upstream_errors,
 )
-from cloud.api.job_events import job_event_stream
 from cloud.api.services import Services
 from cloud.auth.tokens import AccessClaims
-from cloud.db.jobs import ActiveJobExistsError, JobRepository
 from cloud.db.session import ScopeFactory, user_scope
+from cloud.indexing.adapters.postgres_store import PostgresChunkStore
+from cloud.indexing.job_events import job_event_stream
+from cloud.indexing.jobs import ActiveJobExistsError, JobRepository
 from cloud.indexing.manifest_diff import diff_manifest
 from contracts.indexing import (
     IndexJobMessage,

@@ -52,6 +52,7 @@ def _import_without_runtime_packages(statement: str) -> subprocess.CompletedProc
         "import cloud.projects.routes",
         "import cloud.auth.routes",
         "import cloud.llm.routes",
+        "import cloud.indexing.routes",
     ],
 )
 def test_a_cloud_entry_point_needs_nothing_from_the_runtime_extra(statement):
