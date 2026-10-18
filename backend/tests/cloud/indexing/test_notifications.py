@@ -10,9 +10,9 @@ import asyncio
 
 import pytest
 
-from cloud.db.jobs import JobRepository
-from cloud.db.notifications import JobNotifications, asyncpg_dsn
 from cloud.db.session import service_scope
+from cloud.indexing.jobs import JobRepository
+from cloud.indexing.notifications import JobNotifications, asyncpg_dsn
 from contracts.indexing import IndexEvent
 
 

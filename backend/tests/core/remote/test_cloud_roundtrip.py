@@ -19,18 +19,18 @@ import pytest
 from fakes.queue import InMemoryJobQueue
 
 import cloud.indexing.indexer as indexer
-from cloud.adapters.postgres_cache import PostgresEmbeddingCache
-from cloud.adapters.postgres_store import PostgresChunkStore
 from cloud.api.main import create_app
 from cloud.api.services import Limits, Services
+from cloud.auth.accounts import PostgresAccounts
 from cloud.auth.tokens import TokenSigner
-from cloud.db.accounts import PostgresAccounts
-from cloud.db.jobs import JobRepository
 from cloud.db.models import EMBEDDING_DIMENSIONS
-from cloud.db.projects import ProjectRepository
 from cloud.db.session import anonymous_scope, service_scope
-from cloud.db.usage import PostgresUsageMeter, Quota
+from cloud.indexing.adapters.postgres_cache import PostgresEmbeddingCache
+from cloud.indexing.adapters.postgres_store import PostgresChunkStore
 from cloud.indexing.embeddings import EmbeddedBatch
+from cloud.indexing.jobs import JobRepository
+from cloud.llm.usage import PostgresUsageMeter, Quota
+from cloud.projects.repository import ProjectRepository
 from cloud.worker.runner import JobRunner
 from contracts.indexing import SearchRequest
 from core.remote.semantic_index import ProjectRegistry, RemoteSemanticIndex

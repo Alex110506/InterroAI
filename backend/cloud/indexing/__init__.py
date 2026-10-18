@@ -1,6 +1,6 @@
 """
-Indexing as the cloud runs it: the ports, the worker's `run_job`, embedding, and
-the manifest diff behind `/sync`.
+Indexing: the routes, the job table and its live events, the worker's `run_job`,
+embedding and the manifest diff.
 
-Written against the ports in `ports.py` only; `cloud/adapters/` implements them.
+The logic is written against `ports.py`; `adapters/` implements those ports.
 """

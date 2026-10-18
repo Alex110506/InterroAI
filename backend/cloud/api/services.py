@@ -16,22 +16,22 @@ from datetime import timedelta
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from cloud.adapters.blob_uploads import BlobUploadStore
-from cloud.adapters.postgres_cache import PostgresEmbeddingCache
-from cloud.adapters.service_bus import ServiceBusJobQueue
 from cloud.api.throttle import RateLimiter, RateLimits
+from cloud.auth.accounts import Accounts, PostgresAccounts
 from cloud.auth.github import GitHubOAuth
 from cloud.auth.signin import SignInService
 from cloud.auth.tokens import TokenSigner
-from cloud.db.accounts import Accounts, PostgresAccounts
-from cloud.db.notifications import JobNotifications, asyncpg_dsn
-from cloud.db.projects import ProjectRepository
 from cloud.db.session import anonymous_scope, create_engine, create_session_factory
-from cloud.db.usage import PostgresUsageMeter, Quota, UsageMeter
+from cloud.indexing.adapters.blob_uploads import BlobUploadStore
+from cloud.indexing.adapters.postgres_cache import PostgresEmbeddingCache
+from cloud.indexing.adapters.service_bus import ServiceBusJobQueue
 from cloud.indexing.embeddings import embed_texts
+from cloud.indexing.notifications import JobNotifications, asyncpg_dsn
 from cloud.indexing.ports import JobQueue
 from cloud.llm import openai_client
 from cloud.llm.gateway import OpenAIGateway
+from cloud.llm.usage import PostgresUsageMeter, Quota, UsageMeter
+from cloud.projects.repository import ProjectRepository
 from cloud.settings import ApiSettings
 from core.models.gateway import ModelGateway
 

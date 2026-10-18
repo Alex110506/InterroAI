@@ -2,7 +2,7 @@
 The interfaces behind the index: what indexing needs, not who provides it.
 
 `indexer.py` and `embeddings.py` are written against these, and each is
-implemented in `cloud/adapters/`:
+implemented in `cloud/indexing/adapters/`:
 
   ChunkStore       vectors and locations           Postgres + pgvector
   EmbeddingCache   vectors by content hash         a Postgres table

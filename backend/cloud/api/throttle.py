@@ -1,7 +1,7 @@
 """
 Rate limits: how many requests one caller may make per minute.
 
-Quotas (`cloud/db/usage.py`) cap what a user spends in a day. Rate limits stop a
+Quotas (`cloud/llm/usage.py`) cap what a user spends in a day. Rate limits stop a
 burst, such as a runaway client or a script hammering sign-in, from spending it
 in a minute. Each limit is a token bucket per caller: it refills at `per_minute`
 tokens a minute, and a caller may use that many at once.

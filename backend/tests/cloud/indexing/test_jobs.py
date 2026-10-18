@@ -7,8 +7,8 @@ import asyncpg
 import pytest
 from sqlalchemy.engine import make_url
 
-from cloud.db.jobs import NOTIFY_CHANNEL, ActiveJobExistsError, JobRepository
 from cloud.db.session import service_scope, user_scope
+from cloud.indexing.jobs import NOTIFY_CHANNEL, ActiveJobExistsError, JobRepository
 from contracts.indexing import IndexEvent
 
 pytestmark = pytest.mark.integration

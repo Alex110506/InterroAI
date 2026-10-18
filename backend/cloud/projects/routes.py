@@ -13,7 +13,7 @@ from fastapi import APIRouter, HTTPException, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from cloud.api.deps import CurrentUser, ServicesDep
-from cloud.db.projects import ProjectRecord
+from cloud.projects.repository import ProjectRecord
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 

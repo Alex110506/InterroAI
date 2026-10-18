@@ -21,7 +21,7 @@ from openai.types.chat import ChatCompletion, ChatCompletionChunk
 from cloud.api.main import create_app
 from cloud.api.services import Limits, Services
 from cloud.auth.tokens import TokenSigner
-from cloud.db.usage import Quota
+from cloud.llm.usage import Quota
 from core.errors import MissingAPIKeyError
 
 MESSAGES = [{"role": "user", "content": "Say hello"}]

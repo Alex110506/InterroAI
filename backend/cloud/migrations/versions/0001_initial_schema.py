@@ -110,7 +110,7 @@ def upgrade() -> None:
     )
     # Approximate nearest-neighbour search by cosine distance. Filtering by
     # project happens after the index scan, which is why searches turn on
-    # iterative scanning (see cloud/adapters/postgres_store.py).
+    # iterative scanning (see cloud/indexing/adapters/postgres_store.py).
     op.execute(
         "CREATE INDEX chunks_embedding_hnsw ON chunks USING hnsw (embedding vector_cosine_ops)"
     )

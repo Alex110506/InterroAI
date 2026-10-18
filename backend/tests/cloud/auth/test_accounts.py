@@ -7,7 +7,7 @@ import pytest
 from port_contracts.accounts import LATER, NOW, AccountsContract
 from sqlalchemy import text
 
-from cloud.db.accounts import PostgresAccounts
+from cloud.auth.accounts import PostgresAccounts
 from cloud.db.session import anonymous_scope
 
 pytestmark = pytest.mark.integration

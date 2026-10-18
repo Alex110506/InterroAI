@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import uuid4
 
-from cloud.db.accounts import RedeemedCode, RefreshOutcome, UserRecord
+from cloud.auth.accounts import RedeemedCode, RefreshOutcome, UserRecord
 
 
 class InMemoryAccounts:

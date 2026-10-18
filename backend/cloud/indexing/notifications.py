@@ -1,10 +1,10 @@
 """
 The API's ear for the worker's NOTIFYs: one LISTEN connection per process.
 
-`cloud.db.jobs.JobRepository.append_event` sends a NOTIFY on `NOTIFY_CHANNEL`,
+`cloud.indexing.jobs.JobRepository.append_event` sends a NOTIFY on `NOTIFY_CHANNEL`,
 carrying the job id, every time the worker records an event. `JobNotifications`
 listens on one dedicated connection and fans each one out to the streams
-waiting on that job (`cloud/api/job_events.py`).
+waiting on that job (`cloud/indexing/job_events.py`).
 
 Notifications only make a stream prompt; no stream depends on them to be
 correct. If the connection cannot be opened, or is lost, every wait simply runs
@@ -21,7 +21,7 @@ from collections.abc import AsyncIterator
 import asyncpg
 from sqlalchemy.engine import make_url
 
-from cloud.db.jobs import NOTIFY_CHANNEL
+from cloud.indexing.jobs import NOTIFY_CHANNEL
 
 logger = logging.getLogger(__name__)
 

@@ -31,6 +31,7 @@ from datetime import timedelta
 from typing import Protocol
 from urllib.parse import urlencode
 
+from cloud.auth.accounts import Accounts, UserRecord
 from cloud.auth.github import GitHubError, GitHubIdentity
 from cloud.auth.tokens import (
     Clock,
@@ -44,7 +45,6 @@ from cloud.auth.tokens import (
     utc_now,
     verifier_matches,
 )
-from cloud.db.accounts import Accounts, UserRecord
 
 logger = logging.getLogger(__name__)
 

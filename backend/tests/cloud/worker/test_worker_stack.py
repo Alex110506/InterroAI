@@ -11,12 +11,12 @@ from uuid import uuid4
 import pytest
 
 import cloud.indexing.indexer as indexer
-from cloud.adapters.postgres_cache import PostgresEmbeddingCache
-from cloud.adapters.postgres_store import PostgresChunkStore
-from cloud.db.jobs import JobRepository
 from cloud.db.models import EMBEDDING_DIMENSIONS
 from cloud.db.session import service_scope
+from cloud.indexing.adapters.postgres_cache import PostgresEmbeddingCache
+from cloud.indexing.adapters.postgres_store import PostgresChunkStore
 from cloud.indexing.embeddings import EmbeddedBatch
+from cloud.indexing.jobs import JobRepository
 from cloud.indexing.ports import UploadNotFoundError
 from cloud.worker.runner import JobRunner
 from contracts.indexing import Chunk, ChunkUpload, IndexJobMessage

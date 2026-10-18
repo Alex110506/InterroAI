@@ -7,7 +7,7 @@ reconnects with `Last-Event-ID: n` resumes after event *n* and misses nothing.
 The stream ends once the job has settled and every event has been sent.
 
 Between reads the stream waits on a signal from
-`cloud.db.notifications.JobNotifications`, set when the worker's NOTIFY for this
+`cloud.indexing.notifications.JobNotifications`, set when the worker's NOTIFY for this
 job arrives. The wait has a timeout, which doubles as the keep-alive interval,
 so a stream whose notifications never come still finishes — by polling.
 """
@@ -17,7 +17,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator, Awaitable, Callable
 
-from cloud.db.jobs import JobRecord
+from cloud.indexing.jobs import JobRecord
 
 KEEP_ALIVE = ": keep-alive\n\n"
 _TERMINAL_STEPS = ("done", "error")

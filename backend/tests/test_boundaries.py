@@ -6,14 +6,22 @@ imports (parsed with `ast`, never executed):
 
   * the runtime — `agents/`, `api/`, `core/workspace/` — reaches models and the
     index only through their ports, and never names a concrete implementation;
-  * `cloud/indexing/` — the indexing code the cloud runs — is written against
-    its ports and names no adapter, and its worker half never touches the
-    filesystem at all;
+  * the indexing logic the cloud runs — `ports`, `indexer`, `embeddings` and
+    `manifest_diff` in `cloud/indexing/` — is written against its ports and
+    names no adapter or infrastructure SDK, and the worker's half never
+    touches the filesystem at all;
   * `core/models/` and `core/local/` are plumbing that no feature leaks into;
   * `contracts/` depends on nothing else in the backend;
   * the runtime and the cloud side never import each other;
-  * only `cloud/api/` speaks HTTP: nothing else in `cloud/` imports it or the
-    web framework.
+  * only the app shell (`cloud/api/`) and each feature's `routes.py` speak
+    HTTP: nothing else in `cloud/` imports the web framework or the shell;
+  * only the app factory imports a feature's routes, so features never reach
+    into each other's endpoints;
+  * features depend on each other in one direction, and only routes reach
+    into the shell.
+
+The cloud rules are stated per file, over every module under `cloud/` at any
+depth, so a folder added or moved later is covered without editing a list.
 
 They are tests rather than code-review conventions, so breaking one fails CI
 instead of waiting for a reviewer to notice.
@@ -36,6 +44,26 @@ def _modules(*folders: str) -> list[str]:
         for path in (BACKEND / folder).glob("*.py")
         if path.name != "__init__.py"
     )
+
+
+def _cloud_modules() -> list[str]:
+    """
+    Every module under `cloud/`, at any depth, as a backend-relative POSIX path.
+
+    `__init__.py` files count: one runs on every import of its package, so an
+    import there is the likeliest to start a cycle. Only Alembic's own folder,
+    `cloud/migrations/`, is left out; a folder of that name anywhere else is not.
+    """
+    return sorted(
+        relative.as_posix()
+        for relative in (path.relative_to(BACKEND) for path in (BACKEND / "cloud").rglob("*.py"))
+        if relative.parts[:2] != ("cloud", "migrations")
+    )
+
+
+def _is_http(relative: str) -> bool:
+    """The app shell, and each feature's routes: the only cloud modules that speak HTTP."""
+    return relative.startswith("cloud/api/") or relative.endswith("/routes.py")
 
 
 def _imports(relative: str) -> set[str]:
@@ -72,10 +100,23 @@ def test_the_runtime_reaches_models_and_the_index_only_through_ports(module):
     assert _violations(module, _BEHIND_THE_PORTS) == []
 
 
-@pytest.mark.parametrize("module", _modules("cloud/indexing"))
-def test_the_indexing_code_names_no_adapter(module):
-    """It is written against `cloud/indexing/ports.py`; its callers hand the adapters in."""
-    assert _violations(module, ("cloud.adapters", "cloud.db", "cloud.api", "cloud.worker")) == []
+#: The indexing logic the worker runs. It is written against `ports.py` alone;
+#: the adapters and repositories beside it are handed in by its callers.
+_INDEXING_LOGIC = ("ports.py", "indexer.py", "embeddings.py", "manifest_diff.py")
+_INDEXING_LOGIC_MAY_USE = (
+    "cloud.indexing.ports", "cloud.indexing.embeddings", "cloud.llm.openai_client",
+)
+_INFRASTRUCTURE = ("sqlalchemy", "asyncpg", "azure", "fastapi", "starlette")
+
+
+@pytest.mark.parametrize("module", [f"cloud/indexing/{name}" for name in _INDEXING_LOGIC])
+def test_the_indexing_logic_names_no_adapter(module):
+    stray = sorted(
+        name for name in _imports(module)
+        if name.startswith("cloud.") and not name.startswith(_INDEXING_LOGIC_MAY_USE)
+    )
+    assert stray == []
+    assert _violations(module, _INFRASTRUCTURE) == []
 
 
 def test_the_worker_never_touches_the_filesystem():
@@ -111,27 +152,65 @@ def test_the_runtime_never_imports_the_cloud_side(module):
     assert _violations(module, ("cloud",)) == []
 
 
-@pytest.mark.parametrize(
-    "module",
-    _modules(
-        "cloud", "cloud/adapters", "cloud/api", "cloud/auth", "cloud/db",
-        "cloud/indexing", "cloud/llm", "cloud/worker",
-    ),
-)
+@pytest.mark.parametrize("module", _cloud_modules())
 def test_the_cloud_side_never_imports_the_runtime(module):
     """There is no workspace, agent or local transport on a server to reach for."""
     assert _violations(module, ("agents", "api", "core.workspace", "core.remote")) == []
 
 
-@pytest.mark.parametrize(
-    "module",
-    _modules(
-        "cloud/adapters", "cloud/auth", "cloud/db", "cloud/indexing", "cloud/llm", "cloud/worker"
-    ),
-)
-def test_only_the_cloud_api_speaks_http(module):
-    """Everything else in `cloud/` serves the API, never the reverse."""
+@pytest.mark.parametrize("module", [m for m in _cloud_modules() if not _is_http(m)])
+def test_only_the_shell_and_routes_speak_http(module):
+    """A feature's logic and storage serve its routes, never the reverse."""
     assert _violations(module, ("fastapi", "starlette", "cloud.api")) == []
+
+
+@pytest.mark.parametrize("module", [m for m in _cloud_modules() if m != "cloud/api/main.py"])
+def test_only_the_app_factory_imports_a_features_routes(module):
+    """Features meet through `Services` and their own modules, never each other's endpoints."""
+    routes = sorted(
+        name for name in _imports(module)
+        if name.startswith("cloud.") and "routes" in name.split(".")
+    )
+    assert routes == []
+
+
+#: Which cloud packages each may import, besides itself and `_CLOUD_SHARED`.
+#: `cloud/api/` is the composition root and may import any of them; only a
+#: feature's routes may import it back.
+_CLOUD_DEPENDENCIES = {
+    "db": (),
+    "auth": ("db",),
+    "projects": ("db",),
+    "llm": ("db", "auth"),
+    "indexing": ("db", "auth", "llm"),
+    "worker": ("db", "indexing", "llm"),
+}
+_CLOUD_SHARED = ("cloud.settings", "cloud.observability")
+
+
+@pytest.mark.parametrize(
+    "module", [m for m in _cloud_modules() if m.split("/")[1] in _CLOUD_DEPENDENCIES]
+)
+def test_features_depend_on_each_other_one_way(module):
+    package = module.split("/")[1]
+    allowed = {package, *_CLOUD_DEPENDENCIES[package], *({"api"} if _is_http(module) else set())}
+    stray = sorted(
+        name for name in _imports(module)
+        if name.startswith("cloud.") and not name.startswith(_CLOUD_SHARED)
+        and name.split(".")[1] not in allowed
+    )
+    assert stray == []
+
+
+def test_every_cloud_package_has_a_place_in_the_layering():
+    """
+    A new package with no entry would escape the rule above without failing it.
+
+    Packages are read from the modules, not from `__init__.py` files, so a
+    folder created without one, which Python still imports, is caught too.
+    """
+    packages = {module.split("/")[1] for module in _cloud_modules() if module.count("/") >= 2}
+    assert packages == set(_CLOUD_DEPENDENCIES) | {"api"}
 
 
 def test_the_guard_can_see_imports_at_all():
@@ -142,7 +221,17 @@ def test_the_guard_can_see_imports_at_all():
     folders = (
         "agents", "api", "contracts", "core/workspace",
         "core/index", "core/models", "core/local",
-        "cloud/adapters", "cloud/api", "cloud/auth", "cloud/db",
-        "cloud/indexing", "cloud/llm", "cloud/worker",
+        "cloud/api", "cloud/auth", "cloud/db", "cloud/indexing",
+        "cloud/indexing/adapters", "cloud/llm", "cloud/projects", "cloud/worker",
     )
     assert all(_modules(folder) for folder in folders)
+
+    # The cloud rules walk every depth, and never into the migrations.
+    assert "cloud/indexing/indexer.py" in _cloud_modules()
+    assert not any(module.startswith("cloud/migrations/") for module in _cloud_modules())
+
+    # The routes the HTTP and layering rules exempt are really there, and import the shell.
+    assert {m for m in _cloud_modules() if m.endswith("/routes.py")} == {
+        f"cloud/{feature}/routes.py" for feature in ("auth", "indexing", "llm", "projects")
+    }
+    assert "cloud.api.deps" in _imports("cloud/indexing/routes.py")

@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import asyncio
 
-from cloud.api.job_events import KEEP_ALIVE, job_event_stream, sse_event
-from cloud.db.jobs import JobRecord
+from cloud.indexing.job_events import KEEP_ALIVE, job_event_stream, sse_event
+from cloud.indexing.jobs import JobRecord
 
 STARTED = {"step": "C", "status": "start", "total": 1}
 DONE = {"step": "done", "embedded": 1}

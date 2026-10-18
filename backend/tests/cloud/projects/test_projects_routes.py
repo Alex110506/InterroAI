@@ -16,10 +16,10 @@ import pytest
 
 from cloud.api.main import create_app
 from cloud.api.services import Services
+from cloud.auth.accounts import PostgresAccounts
 from cloud.auth.tokens import TokenSigner
-from cloud.db.accounts import PostgresAccounts
-from cloud.db.projects import ProjectRepository
 from cloud.db.session import anonymous_scope
+from cloud.projects.repository import ProjectRepository
 
 pytestmark = pytest.mark.integration
 

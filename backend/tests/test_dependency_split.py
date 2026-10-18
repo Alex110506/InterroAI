@@ -47,6 +47,12 @@ def _import_without_runtime_packages(statement: str) -> subprocess.CompletedProc
         "import cloud.api.main; cloud.api.main.create_app()",
         "import cloud.worker.main",
         "import cloud.api.services",
+        # Each feature's routes import the shell, which imports every feature:
+        # importing one first, in a fresh interpreter, is where a cycle shows.
+        "import cloud.projects.routes",
+        "import cloud.auth.routes",
+        "import cloud.llm.routes",
+        "import cloud.indexing.routes",
     ],
 )
 def test_a_cloud_entry_point_needs_nothing_from_the_runtime_extra(statement):

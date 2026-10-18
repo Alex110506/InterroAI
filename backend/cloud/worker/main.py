@@ -14,12 +14,12 @@ import asyncio
 import logging
 import signal
 
-from cloud.adapters.blob_uploads import BlobUploadStore
-from cloud.adapters.postgres_cache import PostgresEmbeddingCache
-from cloud.adapters.postgres_store import PostgresChunkStore
-from cloud.adapters.service_bus import ServiceBusJobQueue
-from cloud.db.jobs import JobRepository
 from cloud.db.session import create_engine, create_session_factory, service_scope
+from cloud.indexing.adapters.blob_uploads import BlobUploadStore
+from cloud.indexing.adapters.postgres_cache import PostgresEmbeddingCache
+from cloud.indexing.adapters.postgres_store import PostgresChunkStore
+from cloud.indexing.adapters.service_bus import ServiceBusJobQueue
+from cloud.indexing.jobs import JobRepository
 from cloud.llm import openai_client
 from cloud.observability import configure_logging
 from cloud.settings import WorkerSettings

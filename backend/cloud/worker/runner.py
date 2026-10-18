@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 
 
 class JobLedger(Protocol):
-    """What the runner needs from job rows. `cloud.db.jobs.JobRepository` provides it."""
+    """What the runner needs from job rows. `cloud.indexing.jobs.JobRepository` provides it."""
 
     async def get(self, job_id: str): ...
 
