@@ -15,7 +15,7 @@ whether they may have moved since.
 
 `core/remote/semantic_index.py` is the implementation, against the Cloud API.
 Everything behind it — diffing the manifest, embedding, storing — runs in the
-cloud (`cloud/api/indexing.py` and the Embed Worker); this runtime only hashes
+cloud (`cloud/indexing/routes.py` and the Embed Worker); this runtime only hashes
 the files and chunks the ones that changed.
 """
 from __future__ import annotations
