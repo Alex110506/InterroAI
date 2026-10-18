@@ -16,7 +16,9 @@ imports (parsed with `ast`, never executed):
   * only the app shell (`cloud/api/`) and each feature's `routes.py` speak
     HTTP: nothing else in `cloud/` imports the web framework or the shell;
   * only the app factory imports a feature's routes, so features never reach
-    into each other's endpoints.
+    into each other's endpoints;
+  * features depend on each other in one direction, and only routes reach
+    into the shell.
 
 The cloud rules are stated per file, over every module under `cloud/` at any
 depth, so a folder added or moved later is covered without editing a list.
@@ -166,6 +168,43 @@ def test_only_the_app_factory_imports_a_features_routes(module):
     assert routes == []
 
 
+#: Which cloud packages each may import, besides itself and `_CLOUD_SHARED`.
+#: `cloud/api/` is the composition root and may import any of them; only a
+#: feature's routes may import it back.
+_CLOUD_DEPENDENCIES = {
+    "db": (),
+    "auth": ("db",),
+    "projects": ("db",),
+    "llm": ("db", "auth"),
+    "indexing": ("db", "auth", "llm"),
+    "worker": ("db", "indexing", "llm"),
+}
+_CLOUD_SHARED = ("cloud.settings", "cloud.observability")
+
+
+@pytest.mark.parametrize(
+    "module", [m for m in _cloud_modules() if m.split("/")[1] in _CLOUD_DEPENDENCIES]
+)
+def test_features_depend_on_each_other_one_way(module):
+    package = module.split("/")[1]
+    allowed = {package, *_CLOUD_DEPENDENCIES[package], *({"api"} if _is_http(module) else set())}
+    stray = sorted(
+        name for name in _imports(module)
+        if name.startswith("cloud.") and not name.startswith(_CLOUD_SHARED)
+        and name.split(".")[1] not in allowed
+    )
+    assert stray == []
+
+
+def test_every_cloud_package_has_a_place_in_the_layering():
+    """A new package with no entry would escape the rule above without failing it."""
+    packages = {
+        init.parent.relative_to(BACKEND / "cloud").parts[0]
+        for init in (BACKEND / "cloud").glob("*/__init__.py")
+    }
+    assert packages == set(_CLOUD_DEPENDENCIES) | {"api"}
+
+
 def test_the_guard_can_see_imports_at_all():
     """A parser — or a glob — that found nothing would pass every rule vacuously."""
     assert "core.index.semantic_index" in _imports("core/workspace/project_index.py")
@@ -174,11 +213,17 @@ def test_the_guard_can_see_imports_at_all():
     folders = (
         "agents", "api", "contracts", "core/workspace",
         "core/index", "core/models", "core/local",
-        "cloud/indexing/adapters", "cloud/api", "cloud/auth", "cloud/db",
-        "cloud/indexing", "cloud/llm", "cloud/projects", "cloud/worker",
+        "cloud/api", "cloud/auth", "cloud/db", "cloud/indexing",
+        "cloud/indexing/adapters", "cloud/llm", "cloud/projects", "cloud/worker",
     )
     assert all(_modules(folder) for folder in folders)
 
     # The cloud rules walk every depth, and never into the migrations.
     assert "cloud/indexing/indexer.py" in _cloud_modules()
     assert not any(module.startswith("cloud/migrations/") for module in _cloud_modules())
+
+    # The routes the HTTP and layering rules exempt are really there, and import the shell.
+    assert {m for m in _cloud_modules() if m.endswith("/routes.py")} == {
+        f"cloud/{feature}/routes.py" for feature in ("auth", "indexing", "llm", "projects")
+    }
+    assert "cloud.api.deps" in _imports("cloud/indexing/routes.py")

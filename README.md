@@ -24,7 +24,7 @@ The reasoning behind the diagram's main choices is recorded in [`docs/adr/`](doc
 
 - **Electron app** (`frontend/`) — React UI. Its main process starts the local runtime on a free `127.0.0.1` port with a random launch token, and runs the browser half of GitHub sign-in.
 - **Local runtime** (`backend/`: `api/`, `agents/`, `core/`) — FastAPI over the agent pipeline. `core/` is grouped by where each part runs: `workspace/` (your project on disk), `index/` (the indexing service), `models/` (OpenAI access), `local/` (the repo-map cache and the keychain) and `remote/` (the Cloud API clients). Payloads that cross service boundaries live in `contracts/`.
-- **Cloud API** (`backend/cloud/api/`) — FastAPI for Azure Container Apps: GitHub sign-in, projects, sync, upload URLs, index jobs with live progress over server-sent events, search, and the LLM gateway.
+- **Cloud API** (`backend/cloud/`) — FastAPI for Azure Container Apps, one folder per feature around the `cloud/api/` shell: GitHub sign-in (`auth/`), projects (`projects/`), sync, upload URLs, index jobs with live progress over server-sent events and search (`indexing/`), and the LLM gateway (`llm/`).
 - **Embed Worker** (`backend/cloud/worker/`) — takes index jobs off Service Bus, embeds the chunks, and changes the index in one transaction.
 - **Data** — PostgreSQL with pgvector and row-level security per user; Blob Storage for uploads; Service Bus for jobs.
 
