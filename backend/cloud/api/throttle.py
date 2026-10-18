@@ -2,7 +2,7 @@
 Rate limits: how many requests one caller may make per minute.
 
 Quotas (`cloud/llm/usage.py`) cap what a user spends in a day. Rate limits stop a
-burst, such as a runaway client or a script hammering sign-in, from spending it
+burst, such as a runaway client or a script in a loop, from spending it
 in a minute. Each limit is a token bucket per caller: it refills at `per_minute`
 tokens a minute, and a caller may use that many at once.
 
@@ -26,7 +26,6 @@ _FULL_AFTER_SECONDS = 60.0
 class RateLimits:
     """Requests per minute, per caller."""
 
-    sign_in: int = 30
     chat: int = 60
     search: int = 120
     sync: int = 30

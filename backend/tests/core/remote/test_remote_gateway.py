@@ -7,11 +7,11 @@ follows a refusal all the way to the chat event the app receives.
 """
 from __future__ import annotations
 
-from datetime import timedelta
-
 import httpx
 import openai
 import pytest
+from fakes.accounts import InMemoryAccounts
+from fakes.auth0 import FakeAuth0
 from fakes.models import MODEL, FakeGateway, FakeStream, chat_chunks
 from fakes.usage import InMemoryUsageMeter
 from openai.types.chat import ChatCompletion
@@ -19,7 +19,6 @@ from openai.types.chat import ChatCompletion
 from agents.session import ChatSession
 from cloud.api.main import create_app
 from cloud.api.services import Limits, Services
-from cloud.auth.tokens import TokenSigner
 from cloud.llm.usage import Quota
 from core.errors import CloudError, QuotaExceededError, UpstreamLLMError
 from core.models.gateway import LONG_TIMEOUT
@@ -32,12 +31,10 @@ _ROOMY_QUOTA = Quota(requests=100, tokens=100_000)
 
 
 def _gateway(quota: Quota = _ROOMY_QUOTA) -> tuple[RemoteModelGateway, FakeGateway]:
-    signer = TokenSigner("g" * 32, issuer=CLOUD, access_ttl=timedelta(minutes=15))
+    tenant = FakeAuth0().add_user(1, "octocat")
     upstream = FakeGateway()
     services = Services(
-        signin=None,
-        signer=signer,
-        accounts=None,
+        identity=tenant.identity(InMemoryAccounts(), allowlist=("octocat",)),
         projects=None,
         usage=InMemoryUsageMeter(),
         gateway=upstream,
@@ -45,7 +42,7 @@ def _gateway(quota: Quota = _ROOMY_QUOTA) -> tuple[RemoteModelGateway, FakeGatew
     )
     session = CloudSession(CLOUD, transport=httpx.ASGITransport(app=create_app(services)))
     session.adopt_tokens(
-        access_token=signer.access_token("user-1", "octocat"),
+        access_token=tenant.token(1),
         refresh_token="not-used-here",
         expires_in=900,
     )

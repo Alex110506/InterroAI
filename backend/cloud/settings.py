@@ -7,14 +7,14 @@ Container Apps secrets backed by Key Vault references and reach the process as
 the very same environment variables — so there is no Key Vault client in this
 code, and nothing here changes when it is deployed.
 
-Two classes because the two processes need different things: the worker has no
-business holding the GitHub client secret or the JWT signing key.
+Two classes because the two processes need different things: the worker checks
+no access tokens, so it has no business knowing the Auth0 tenant or the allowlist.
 """
 from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import Field, SecretStr
+from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 #: `backend/` is the working directory in development, so the repo-root `.env`
@@ -72,21 +72,20 @@ class WorkerSettings(BaseSettings):
 
 
 class ApiSettings(WorkerSettings):
-    """The worker's settings plus sign-in, tokens and quotas."""
+    """The worker's settings plus Auth0, the allowlist and quotas."""
 
-    github_client_id: str
-    github_client_secret: SecretStr
-    public_api_url: str = "http://localhost:8080"
+    #: The Auth0 tenant the desktop app signs in with, e.g. `interroai.eu.auth0.com`.
+    #: Access tokens are checked against the keys it publishes.
+    auth0_domain: str
+    #: This API's identifier in Auth0: the audience every access token must carry.
+    auth0_audience: str
+    #: The desktop app's Auth0 client id. A public client, so not a secret; the
+    #: app reads it from `/auth/config` rather than having it built in.
+    auth0_client_id: str
 
     #: The API serves many requests at once, so it holds more than the worker.
     database_pool_size: int = 5
     database_max_overflow: int = 5
-
-    #: HS256 key for access tokens. 32 bytes is the floor for HMAC-SHA256 to
-    #: carry its full strength.
-    jwt_secret: SecretStr = Field(min_length=32)
-    access_token_ttl_seconds: int = 15 * 60
-    refresh_token_ttl_days: int = 30
 
     #: Comma-separated. Empty admits nobody: a misconfigured deployment should
     #: fail closed, not open sign-up on the platform's OpenAI key.
@@ -106,9 +105,7 @@ class ApiSettings(WorkerSettings):
     #: manifest, a path and a hash per file; chunks go to Blob Storage instead.
     max_request_bytes: int = 8_000_000
 
-    #: Per-minute rate limits (cloud/api/throttle.py). Sign-in is counted per
-    #: client address, since nobody is signed in yet; the rest per user.
-    sign_in_per_minute: int = 30
+    #: Per-minute rate limits per user (cloud/api/throttle.py).
     chat_per_minute: int = 60
     search_per_minute: int = 120
     sync_per_minute: int = 30

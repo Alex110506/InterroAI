@@ -1,11 +1,9 @@
 """Rate limits: the token buckets, and the routes that spend from them."""
 from __future__ import annotations
 
-from datetime import timedelta
-
 import pytest
 from fakes.accounts import InMemoryAccounts
-from fakes.github import FakeGitHub
+from fakes.auth0 import FakeAuth0
 from fakes.models import MODEL, FakeGateway
 from fakes.usage import InMemoryUsageMeter
 from fastapi.testclient import TestClient
@@ -13,8 +11,6 @@ from fastapi.testclient import TestClient
 from cloud.api.main import create_app
 from cloud.api.services import Limits, Services
 from cloud.api.throttle import RateLimiter, RateLimits
-from cloud.auth.signin import SignInService
-from cloud.auth.tokens import TokenSigner
 
 
 class FakeClock:
@@ -69,7 +65,7 @@ def test_memory_stays_bounded(clock):
     limiter = RateLimiter(clock=clock, max_buckets=100)
 
     for caller in range(1_000):
-        limiter.hit("sign_in", f"10.0.{caller // 250}.{caller % 250}", 30)
+        limiter.hit("chat", f"user:{caller}", 30)
         clock.now += 0.01
 
     assert len(limiter) <= 100
@@ -90,16 +86,10 @@ def test_idle_buckets_are_dropped_first_and_busy_ones_keep_their_count(clock):
 # ── Routes ───────────────────────────────────────────────────────────────────
 
 
-def _signer() -> TokenSigner:
-    return TokenSigner("t" * 32, issuer="http://testserver", access_ttl=timedelta(minutes=15))
-
-
 def test_chat_past_its_rate_is_429_rate_limited_per_user():
-    signer = _signer()
+    tenant = FakeAuth0().add_user(1, "alice").add_user(2, "bob")
     services = Services(
-        signin=None,
-        signer=signer,
-        accounts=None,
+        identity=tenant.identity(InMemoryAccounts(), allowlist=("alice", "bob")),
         projects=None,
         usage=InMemoryUsageMeter(),
         gateway=FakeGateway(),
@@ -108,38 +98,13 @@ def test_chat_past_its_rate_is_429_rate_limited_per_user():
     client = TestClient(create_app(services))
     body = {"model": MODEL, "messages": [{"role": "user", "content": "hi"}]}
 
-    def chat_as(user: str):
-        headers = {"Authorization": f"Bearer {signer.access_token(user, user)}"}
-        return client.post("/llm/chat", json=body, headers=headers)
+    def chat_as(github_id: int):
+        return client.post("/llm/chat", json=body, headers=tenant.bearer(github_id))
 
-    assert [chat_as("alice").status_code for _ in range(2)] == [200, 200]
-    refused = chat_as("alice")
+    assert [chat_as(1).status_code for _ in range(2)] == [200, 200]
+    refused = chat_as(1)
 
     assert refused.status_code == 429
     assert refused.json()["detail"]["code"] == "rate_limited"
     assert int(refused.headers["retry-after"]) >= 1
-    assert chat_as("bob").status_code == 200, "each user has their own bucket"
-
-
-def test_sign_in_is_rate_limited_per_client_address():
-    signer, accounts = _signer(), InMemoryAccounts()
-    signin = SignInService(
-        accounts=accounts,
-        github=FakeGitHub(),
-        signer=signer,
-        allowlist=frozenset({"alex110506"}),
-        refresh_ttl=timedelta(days=30),
-    )
-    services = Services(
-        signin=signin,
-        signer=signer,
-        accounts=accounts,
-        projects=None,
-        limits=Limits(rates=RateLimits(sign_in=2)),
-    )
-    client = TestClient(create_app(services))
-    guess = {"grant_type": "refresh_token", "refresh_token": "a-guess"}
-
-    statuses = [client.post("/auth/token", json=guess).status_code for _ in range(3)]
-
-    assert statuses == [400, 400, 429]
+    assert chat_as(2).status_code == 200, "each user has their own bucket"

@@ -17,10 +17,9 @@ import httpx
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from cloud.api.throttle import RateLimiter, RateLimits
-from cloud.auth.accounts import Accounts, PostgresAccounts
-from cloud.auth.github import GitHubOAuth
-from cloud.auth.signin import SignInService
-from cloud.auth.tokens import TokenSigner
+from cloud.auth.accounts import PostgresAccounts
+from cloud.auth.auth0 import Auth0, Auth0Config
+from cloud.auth.identity import IdentityService
 from cloud.db.session import anonymous_scope, create_engine, create_session_factory
 from cloud.indexing.adapters.blob_uploads import BlobUploadStore
 from cloud.indexing.adapters.postgres_cache import PostgresEmbeddingCache
@@ -34,8 +33,6 @@ from cloud.llm.usage import PostgresUsageMeter, Quota, UsageMeter
 from cloud.projects.repository import ProjectRepository
 from cloud.settings import ApiSettings
 from core.models.gateway import ModelGateway
-
-CALLBACK_PATH = "/auth/github/callback"
 
 #: How long one startup step may run before the app starts without it. The
 #: Azure SDKs retry an unreachable endpoint for minutes on their own, which is
@@ -58,10 +55,10 @@ class Limits:
 
 @dataclass
 class Services:
-    signin: SignInService
-    signer: TokenSigner
-    accounts: Accounts
+    identity: IdentityService
     projects: ProjectRepository
+    #: Where the desktop app signs in, served to it at `/auth/config`.
+    auth0: Auth0Config | None = None
     #: For the repositories that run in a user's scope, built per request.
     sessions: async_sessionmaker[AsyncSession] | None = None
     uploads: BlobUploadStore | None = None
@@ -72,8 +69,6 @@ class Services:
     notifications: JobNotifications = field(default_factory=lambda: JobNotifications(None))
     limits: Limits = field(default_factory=Limits)
     limiter: RateLimiter = field(default_factory=RateLimiter)
-    #: Sign-in cookies are marked Secure whenever the API is served over https.
-    secure_cookies: bool = False
     closers: list[Callable[[], Awaitable[None]]] = field(default_factory=list)
     #: Run as the app starts, to get backing services ready: creating the upload
     #: container, which a fresh local stack does not have.
@@ -115,29 +110,19 @@ def build_services(settings: ApiSettings) -> Services:
     )
     sessions = create_session_factory(engine)
     http = httpx.AsyncClient()
-    public_url = settings.public_api_url.rstrip("/")
 
     def anonymous():
         return anonymous_scope(sessions)
 
-    signer = TokenSigner(
-        settings.jwt_secret.get_secret_value(),
-        issuer=public_url,
-        access_ttl=timedelta(seconds=settings.access_token_ttl_seconds),
+    auth0 = Auth0Config(
+        domain=settings.auth0_domain,
+        client_id=settings.auth0_client_id,
+        audience=settings.auth0_audience,
     )
-    accounts = PostgresAccounts(anonymous)
-    github = GitHubOAuth(
-        client_id=settings.github_client_id,
-        client_secret=settings.github_client_secret.get_secret_value(),
-        callback_url=public_url + CALLBACK_PATH,
-        http=http,
-    )
-    signin = SignInService(
-        accounts=accounts,
-        github=github,
-        signer=signer,
+    identity = IdentityService(
+        auth0=Auth0(auth0, http=http),
+        accounts=PostgresAccounts(anonymous),
         allowlist=settings.allowlist,
-        refresh_ttl=timedelta(days=settings.refresh_token_ttl_days),
     )
     uploads = BlobUploadStore.from_connection_string(
         settings.blob_connection_string.get_secret_value(),
@@ -155,10 +140,9 @@ def build_services(settings: ApiSettings) -> Services:
         return vector
 
     return Services(
-        signin=signin,
-        signer=signer,
-        accounts=accounts,
+        identity=identity,
         projects=ProjectRepository(sessions),
+        auth0=auth0,
         sessions=sessions,
         uploads=uploads,
         queue=queue,
@@ -173,7 +157,6 @@ def build_services(settings: ApiSettings) -> Services:
             sse_heartbeat_seconds=settings.sse_heartbeat_seconds,
             quota=Quota(requests=settings.daily_request_quota, tokens=settings.daily_token_quota),
             rates=RateLimits(
-                sign_in=settings.sign_in_per_minute,
                 chat=settings.chat_per_minute,
                 search=settings.search_per_minute,
                 sync=settings.sync_per_minute,
@@ -181,7 +164,6 @@ def build_services(settings: ApiSettings) -> Services:
             ),
             chat_models=settings.chat_model_allowlist,
         ),
-        secure_cookies=public_url.startswith("https://"),
         closers=[engine.dispose, http.aclose, uploads.close, queue.close, notifications.close],
         # Upload URLs point into this container, so it has to exist before the
         # first one is used. In Azure it already does, and this does nothing.

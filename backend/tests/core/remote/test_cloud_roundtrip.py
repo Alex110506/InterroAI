@@ -12,17 +12,16 @@ from __future__ import annotations
 
 import asyncio
 import itertools
-from datetime import timedelta
 
 import httpx
 import pytest
+from fakes.auth0 import FakeAuth0
 from fakes.queue import InMemoryJobQueue
 
 import cloud.indexing.indexer as indexer
 from cloud.api.main import create_app
 from cloud.api.services import Limits, Services
 from cloud.auth.accounts import PostgresAccounts
-from cloud.auth.tokens import TokenSigner
 from cloud.db.models import EMBEDDING_DIMENSIONS
 from cloud.db.session import anonymous_scope, service_scope
 from cloud.indexing.adapters.postgres_cache import PostgresEmbeddingCache
@@ -69,12 +68,10 @@ async def remote_index(app_sessions, blob_uploads, fake_keyring, tmp_path, monke
         return _vector_for(query)
 
     queue = InMemoryJobQueue()
-    signer = TokenSigner("t" * 32, issuer=CLOUD, access_ttl=timedelta(minutes=15))
+    tenant = FakeAuth0()
     accounts = PostgresAccounts(anonymous)
     services = Services(
-        signin=None,
-        signer=signer,
-        accounts=accounts,
+        identity=tenant.identity(accounts),
         projects=ProjectRepository(app_sessions),
         sessions=app_sessions,
         uploads=blob_uploads,
@@ -98,7 +95,7 @@ async def remote_index(app_sessions, blob_uploads, fake_keyring, tmp_path, monke
     user = await accounts.upsert_github_user(next(_github_ids), "Alex110506", None)
     session = CloudSession(CLOUD, transport=httpx.ASGITransport(app=create_app(services)))
     session.adopt_tokens(
-        access_token=signer.access_token(user.id, user.login),
+        access_token=tenant.token(user.github_id),
         refresh_token="not-used-here",
         expires_in=900,
     )

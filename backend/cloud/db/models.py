@@ -55,32 +55,6 @@ class User(Base):
     created_at: Mapped[datetime] = _now()
 
 
-class RefreshToken(Base):
-    __tablename__ = "refresh_tokens"
-
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), index=True
-    )
-    #: sha256 of the token. The token itself is only ever held by the client.
-    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    created_at: Mapped[datetime] = _now()
-
-
-class LoginCode(Base):
-    """A one-time code handed to the app's loopback listener, bound to its PKCE challenge."""
-
-    __tablename__ = "login_codes"
-
-    code_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
-    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
-    code_challenge: Mapped[str] = mapped_column(String(128))
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-
-
 class Project(Base):
     __tablename__ = "projects"
 

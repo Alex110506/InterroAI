@@ -64,6 +64,11 @@ def test_the_app_role_gets_data_access_to_application_tables_only(upgrade_sql):
     assert "alembic_version" not in grant
 
 
+def test_the_api_keeps_no_sign_in_credentials_once_auth0_issues_them(upgrade_sql):
+    assert "DROP TABLE login_codes" in upgrade_sql
+    assert "DROP TABLE refresh_tokens" in upgrade_sql
+
+
 @pytest.mark.integration
 def test_the_schema_tears_down_and_rebuilds_cleanly(migrated_database, database_urls):
     config = _config(database_urls.owner)

@@ -1,4 +1,4 @@
 """
-Signing in: the GitHub flow, PKCE, the API's own tokens, the accounts they are
-kept in, and the routes that serve them.
+Who a request runs as: Auth0's access tokens checked against its keys, the users
+they map to, and the `/auth/config` and `/me` routes.
 """

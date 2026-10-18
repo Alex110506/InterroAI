@@ -33,7 +33,7 @@ from cloud.api.deps import (
     upstream_errors,
 )
 from cloud.api.services import Services
-from cloud.auth.tokens import AccessClaims
+from cloud.auth.identity import AccessClaims
 from cloud.db.session import ScopeFactory, user_scope
 from cloud.indexing.adapters.postgres_store import PostgresChunkStore
 from cloud.indexing.job_events import job_event_stream
