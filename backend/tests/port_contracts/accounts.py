@@ -10,7 +10,7 @@ import itertools
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
-from cloud.db.accounts import RedeemedCode, RefreshOutcome
+from cloud.auth.accounts import RedeemedCode, RefreshOutcome
 
 NOW = datetime(2026, 9, 15, 12, 0, tzinfo=UTC)
 LATER = NOW + timedelta(minutes=5)
